@@ -1,5 +1,7 @@
 # AgentQueue
 
+<img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
+
 A local, dependency-free queue and usage dashboard for Codex desktop power users.
 
 AgentQueue reads your local Codex state and gives you a live board of what is running, what just finished, what needs attention, and how quickly current usage limits are burning down.
