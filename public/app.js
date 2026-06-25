@@ -41,6 +41,8 @@ const detailKicker = document.querySelector("#detailKicker");
 const detailTitle = document.querySelector("#detailTitle");
 const detailSubtitle = document.querySelector("#detailSubtitle");
 const detailContent = document.querySelector("#detailContent");
+const cardMenu = document.querySelector("#cardMenu");
+let menuThreadId = null;
 
 const quickFilterDefs = [
   { id: "all", label: "All", tip: "Show every matching parent thread" },
@@ -368,18 +370,6 @@ function renderCard(thread) {
   time.dateTime = thread.activityAt || "";
   time.textContent = formatClock(thread.activityAt);
 
-  const open = card.querySelector(".open-link");
-  open.href = thread.codexUrl;
-
-  card.querySelector(".copy").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(thread.id);
-  });
-
-  card.querySelector(".details").addEventListener("click", (event) => {
-    event.preventDefault();
-    showDetails(thread.id);
-  });
-
   card.addEventListener("click", (event) => {
     if (event.target.closest("a, button")) return;
     showDetails(thread.id);
@@ -387,6 +377,16 @@ function renderCard(thread) {
 
   card.addEventListener("keydown", (event) => {
     if (event.key === "Enter") showDetails(thread.id);
+    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      event.preventDefault();
+      const rect = card.getBoundingClientRect();
+      showCardMenu(thread.id, rect.left + 24, rect.top + 24);
+    }
+  });
+
+  card.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    showCardMenu(thread.id, event.clientX, event.clientY);
   });
 
   return card;
@@ -586,6 +586,75 @@ function closeDetails() {
   document.body.classList.remove("detail-open");
 }
 
+function getReadActionIds(thread, includeChildren = false) {
+  const ids = [thread.id];
+  if (includeChildren) ids.push(...getChildThreads(thread).map((child) => child.id));
+  return Array.from(new Set(ids));
+}
+
+async function markRead(thread, includeChildren = false) {
+  const threadIds = getReadActionIds(thread, includeChildren);
+  const response = await fetch("/api/threads/read", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ threadIds }),
+  });
+
+  if (!response.ok) throw new Error(`Mark read failed: ${response.status}`);
+
+  const ids = new Set(threadIds);
+  state.threads = state.threads.map((item) => ids.has(item.id) ? { ...item, unread: false } : item);
+  render();
+  await loadThreads();
+}
+
+function setMenuItemHidden(action, hidden) {
+  const item = cardMenu.querySelector(`[data-action="${action}"]`);
+  if (item) item.hidden = hidden;
+}
+
+function showCardMenu(threadId, x, y) {
+  const thread = getThreadById(threadId);
+  if (!thread) return;
+
+  const stats = childStats(thread);
+  menuThreadId = threadId;
+
+  setMenuItemHidden("mark-read", !thread.unread);
+  setMenuItemHidden("mark-family-read", !(stats.total && (thread.unread || stats.unread)));
+
+  cardMenu.hidden = false;
+  cardMenu.style.left = "0px";
+  cardMenu.style.top = "0px";
+
+  const rect = cardMenu.getBoundingClientRect();
+  const left = Math.min(x, window.innerWidth - rect.width - 8);
+  const top = Math.min(y, window.innerHeight - rect.height - 8);
+  cardMenu.style.left = `${Math.max(8, left)}px`;
+  cardMenu.style.top = `${Math.max(8, top)}px`;
+  cardMenu.querySelector("button:not([hidden])")?.focus();
+}
+
+function closeCardMenu() {
+  cardMenu.hidden = true;
+  menuThreadId = null;
+}
+
+async function handleMenuAction(action) {
+  const thread = getThreadById(menuThreadId);
+  if (!thread) return;
+
+  closeCardMenu();
+
+  if (action === "details") showDetails(thread.id);
+  if (action === "open") window.location.href = thread.codexUrl;
+  if (action === "copy-id") await navigator.clipboard.writeText(thread.id);
+  if (action === "copy-link") await navigator.clipboard.writeText(thread.codexUrl);
+  if (action === "copy-title") await navigator.clipboard.writeText(getDisplayTitle(thread));
+  if (action === "mark-read") await markRead(thread, false);
+  if (action === "mark-family-read") await markRead(thread, true);
+}
+
 function setPanelCollapsed(collapsed, persist = true) {
   state.panelCollapsed = collapsed;
   document.body.classList.toggle("sidebar-collapsed", collapsed);
@@ -652,8 +721,20 @@ search.addEventListener("input", () => {
 refresh.addEventListener("click", loadThreads);
 panelToggle.addEventListener("click", () => setPanelCollapsed(!state.panelCollapsed));
 closeDetail.addEventListener("click", closeDetails);
+cardMenu.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  handleMenuAction(button.dataset.action).catch((error) => {
+    boardSummary.textContent = error.message;
+  });
+});
+document.addEventListener("click", (event) => {
+  if (!cardMenu.hidden && !event.target.closest("#cardMenu")) closeCardMenu();
+});
+document.addEventListener("scroll", closeCardMenu, true);
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (!cardMenu.hidden) closeCardMenu();
   if (!detailDrawer.hidden) closeDetails();
 });
 

@@ -60,6 +60,20 @@ async function readJsonFile(filePath, fallback) {
   }
 }
 
+async function readRequestJson(req, maxBytes = 64 * 1024) {
+  const chunks = [];
+  let size = 0;
+
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("Request body is too large");
+    chunks.push(chunk);
+  }
+
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
 async function firstExistingPath(paths) {
   for (const filePath of paths) {
     try {
@@ -401,6 +415,44 @@ function readLogHealth() {
   return health;
 }
 
+function removeUnreadIdsFromMap(unreadByHost, ids) {
+  if (!unreadByHost || typeof unreadByHost !== "object") return 0;
+  let removed = 0;
+
+  for (const [host, unreadIds] of Object.entries(unreadByHost)) {
+    if (!Array.isArray(unreadIds)) continue;
+    const next = unreadIds.filter((id) => !ids.has(id));
+    removed += unreadIds.length - next.length;
+    unreadByHost[host] = next;
+  }
+
+  return removed;
+}
+
+async function markThreadsRead(threadIds) {
+  const ids = new Set(
+    (Array.isArray(threadIds) ? threadIds : [])
+      .filter((id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id))
+  );
+
+  if (ids.size === 0) return { markedIds: [], removed: 0 };
+
+  const state = await readJsonFile(globalStatePath, {});
+  const atomState = state["electron-persisted-atom-state"] || {};
+  let removed = 0;
+
+  removed += removeUnreadIdsFromMap(state["unread-thread-ids-by-host-v1"], ids);
+  removed += removeUnreadIdsFromMap(atomState["unread-thread-ids-by-host-v1"], ids);
+
+  if (removed > 0) {
+    const tempPath = `${globalStatePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    await fs.rename(tempPath, globalStatePath);
+  }
+
+  return { markedIds: Array.from(ids), removed };
+}
+
 function getStatus({ activityAt, session }, now = Date.now()) {
   const activityMs = new Date(activityAt || 0).getTime();
   const taskCompleteMs = new Date(session?.taskCompleteAt || 0).getTime();
@@ -627,6 +679,17 @@ const server = http.createServer(async (req, res) => {
   try {
     if (url.pathname === "/api/threads") {
       sendJson(res, 200, await loadThreads());
+      return;
+    }
+
+    if (url.pathname === "/api/threads/read") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "Method not allowed" });
+        return;
+      }
+
+      const body = await readRequestJson(req);
+      sendJson(res, 200, { ok: true, ...(await markThreadsRead(body.threadIds)) });
       return;
     }
 

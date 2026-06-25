@@ -124,14 +124,20 @@
         <div class="child-summary"></div>
         <footer>
           <time></time>
-          <div class="card-actions">
-            <button type="button" class="details">Details</button>
-            <a class="open-link" href="#">Open</a>
-            <button type="button" class="copy">Copy ID</button>
-          </div>
         </footer>
       </article>
     </template>
+
+    <div id="cardMenu" class="context-menu" hidden role="menu" aria-label="Thread actions">
+      <button type="button" data-action="details" role="menuitem">Details</button>
+      <button type="button" data-action="open" role="menuitem">Open in Codex</button>
+      <button type="button" data-action="mark-read" role="menuitem">Mark as Read</button>
+      <button type="button" data-action="mark-family-read" role="menuitem">Mark Thread + Subagents Read</button>
+      <hr />
+      <button type="button" data-action="copy-id" role="menuitem">Copy ID</button>
+      <button type="button" data-action="copy-link" role="menuitem">Copy Codex Link</button>
+      <button type="button" data-action="copy-title" role="menuitem">Copy Title</button>
+    </div>
 
     <script src="/app.js"></script>
   </body>
