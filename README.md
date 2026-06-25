@@ -1,6 +1,6 @@
 # AgentQueue
 
-[![Install Now](https://img.shields.io/badge/Install%20Now-Run%20in%20Windows-0F172A?style=for-the-badge&logo=windows)](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe)
+[![Install Now](https://img.shields.io/badge/Install%20Now-Recommended%20Script%20Install-0F172A?style=for-the-badge&logo=powershell)](https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1)
 
 <img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
 
@@ -31,24 +31,25 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 
 ## Install Now
 
-### One-click installer
+### One-click installer (recommended)
 
-Use this direct link to download and run: https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe
+Use this direct link to download and run the installer script:
+https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1
 
 If you prefer markdown:
 
-[Download and run the installer](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe) to install AgentQueue in one step.
+[Download and run the installer](https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1) to install AgentQueue in one step.
 
 ### One-click PowerShell command (Windows)
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe -UseBasicParsing -OutFile $env:TEMP\AgentQueueInstaller.exe; & $env:TEMP\AgentQueueInstaller.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1 -UseBasicParsing -OutFile $env:TEMP\agentqueue-install.ps1; & $env:TEMP\agentqueue-install.ps1"
 ```
 
-If you prefer script-based install:
+If you need a legacy EXE install:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1 -UseBasicParsing -OutFile $env:TEMP\agentqueue-install.ps1; & $env:TEMP\agentqueue-install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe -UseBasicParsing -OutFile $env:TEMP\AgentQueueInstaller.exe; & $env:TEMP\AgentQueueInstaller.exe"
 ```
 
 To install a specific version, use `-Version` (for example, `-Version 0.1.0`) if you clone and run locally.
