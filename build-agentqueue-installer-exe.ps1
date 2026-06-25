@@ -27,7 +27,7 @@ Copy-Item -LiteralPath $sourceInstall -Destination (Join-Path $staging "install.
 Set-Content -Path (Join-Path $staging "run-installer.cmd") -Value @'
 @echo off
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch
 '@ -NoNewline
 
 Set-Content -Path $sedPath -Value @"
