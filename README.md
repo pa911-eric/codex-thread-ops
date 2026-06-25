@@ -31,6 +31,12 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 
 ## Install Now
 
+### One-click installer
+
+Use this direct link to download and run: https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe
+
+If you prefer markdown:
+
 [Download and run the installer](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe) to install AgentQueue in one step.
 
 ### One-click PowerShell command (Windows)
