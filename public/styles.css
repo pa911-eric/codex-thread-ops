@@ -399,8 +399,6 @@ body.is-resizing .panel-resize-handle::after {
 .usage-detail {
   display: grid;
   gap: 5px;
-  padding-top: 6px;
-  border-top: 1px solid #e5e7eb;
 }
 
 .usage-detail[hidden] {
