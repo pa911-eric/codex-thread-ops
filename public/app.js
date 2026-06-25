@@ -16,6 +16,7 @@ const state = {
   hideDone: true,
   focusMode: false,
   panelCollapsed: false,
+  panelWidth: 348,
   usage: null,
   selectedThreadId: null,
   lastSnapshotAt: null,
@@ -23,6 +24,12 @@ const state = {
 
 const preferencesKey = "agentqueue-preferences-v1";
 const legacyPreferencesKey = "codex-thread-ops-preferences-v1";
+const panelWidthDefaults = {
+  min: 280,
+  max: 620,
+  default: 348,
+  mobileBreakpoint: 720,
+};
 const board = document.querySelector("#board");
 const columnTemplate = document.querySelector("#columnTemplate");
 const cardTemplate = document.querySelector("#cardTemplate");
@@ -35,6 +42,7 @@ const quickFilters = document.querySelector("#quickFilters");
 const sortMode = document.querySelector("#sortMode");
 const panelToggle = document.querySelector("#panelToggle");
 const controlPanel = document.querySelector("#controlPanel");
+const panelResizeHandle = document.querySelector("#panelResizeHandle");
 const boardSummary = document.querySelector("#boardSummary");
 const activeFilters = document.querySelector("#activeFilters");
 const detailDrawer = document.querySelector("#detailDrawer");
@@ -79,6 +87,7 @@ function savePreferences() {
     hideDone: state.hideDone,
     focusMode: state.focusMode,
     panelCollapsed: state.panelCollapsed,
+    panelWidth: state.panelWidth,
   }));
 }
 
@@ -94,6 +103,7 @@ function restorePreferences() {
   if (quickFilterDefs.some((filter) => filter.id === prefs.quickFilter)) state.quickFilter = prefs.quickFilter;
   if (["priority", "updated", "running", "risk"].includes(prefs.sortMode)) state.sortMode = prefs.sortMode;
   if (Object.hasOwn(prefs, "hideDone")) state.hideDone = Boolean(prefs.hideDone);
+  if (Number.isFinite(Number(prefs.panelWidth))) state.panelWidth = Number(prefs.panelWidth);
   state.focusMode = Boolean(prefs.focusMode);
   state.panelCollapsed = Boolean(prefs.panelCollapsed);
 
@@ -101,6 +111,7 @@ function restorePreferences() {
   sortMode.value = state.sortMode;
   hideDone.checked = state.hideDone;
   focusMode.setAttribute("aria-pressed", String(state.focusMode));
+  applyPanelWidth(state.panelWidth, false);
   setPanelCollapsed(state.panelCollapsed, false);
 }
 
@@ -754,6 +765,98 @@ async function handleMenuAction(action) {
   if (action === "mark-family-read") await markRead(thread, true);
 }
 
+function getPanelMaxWidth() {
+  const viewportMax = Math.floor(window.innerWidth * 0.52);
+  return Math.max(panelWidthDefaults.min, Math.min(panelWidthDefaults.max, viewportMax));
+}
+
+function clampPanelWidth(value) {
+  const width = Number(value);
+  const fallback = Number.isFinite(width) ? width : panelWidthDefaults.default;
+  return Math.round(Math.max(panelWidthDefaults.min, Math.min(getPanelMaxWidth(), fallback)));
+}
+
+function updatePanelResizeHandle(width) {
+  const max = getPanelMaxWidth();
+  panelResizeHandle.setAttribute("aria-valuemin", String(panelWidthDefaults.min));
+  panelResizeHandle.setAttribute("aria-valuemax", String(max));
+  panelResizeHandle.setAttribute("aria-valuenow", String(width));
+  panelResizeHandle.setAttribute("aria-valuetext", `${width}px`);
+}
+
+function applyPanelWidth(width, persist = true) {
+  const nextWidth = clampPanelWidth(width);
+  state.panelWidth = nextWidth;
+  document.documentElement.style.setProperty("--panel-width", `${nextWidth}px`);
+  updatePanelResizeHandle(nextWidth);
+  if (persist) savePreferences();
+}
+
+function initPanelResize() {
+  let pointerId = null;
+  let startX = 0;
+  let startWidth = panelWidthDefaults.default;
+
+  panelResizeHandle.addEventListener("pointerdown", (event) => {
+    if (state.panelCollapsed || window.innerWidth <= panelWidthDefaults.mobileBreakpoint) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startWidth = state.panelWidth;
+    panelResizeHandle.setPointerCapture(pointerId);
+    document.body.classList.add("is-resizing");
+    event.preventDefault();
+  });
+
+  panelResizeHandle.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== pointerId) return;
+    applyPanelWidth(startWidth + event.clientX - startX, false);
+  });
+
+  function finishResize(event) {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    document.body.classList.remove("is-resizing");
+    savePreferences();
+  }
+
+  panelResizeHandle.addEventListener("pointerup", finishResize);
+  panelResizeHandle.addEventListener("pointercancel", finishResize);
+
+  panelResizeHandle.addEventListener("dblclick", () => {
+    applyPanelWidth(panelWidthDefaults.default);
+  });
+
+  panelResizeHandle.addEventListener("keydown", (event) => {
+    const steps = {
+      ArrowLeft: -16,
+      ArrowRight: 16,
+      PageUp: 48,
+      PageDown: -48,
+    };
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      applyPanelWidth(panelWidthDefaults.min);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      applyPanelWidth(getPanelMaxWidth());
+      return;
+    }
+
+    if (!Object.hasOwn(steps, event.key)) return;
+    event.preventDefault();
+    applyPanelWidth(state.panelWidth + steps[event.key]);
+  });
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > panelWidthDefaults.mobileBreakpoint) applyPanelWidth(state.panelWidth, false);
+    else updatePanelResizeHandle(state.panelWidth);
+  });
+}
+
 function setPanelCollapsed(collapsed, persist = true) {
   state.panelCollapsed = collapsed;
   document.body.classList.toggle("sidebar-collapsed", collapsed);
@@ -861,6 +964,7 @@ setInterval(() => {
   if (state.threads.length) renderMetrics();
 }, 1000);
 
+initPanelResize();
 restorePreferences();
 renderStatusFilters();
 renderQuickFilters();
