@@ -577,7 +577,6 @@ body.is-resizing .panel-resize-handle::after {
   padding: 11px;
   background: var(--surface);
   border: 1px solid var(--outline);
-  border-left: 4px solid var(--done);
   border-radius: var(--radius);
   cursor: pointer;
 }
@@ -599,27 +598,8 @@ body.is-resizing .panel-resize-handle::after {
   color: #005236;
 }
 
-.card[data-status="running"] {
-  border-left-color: var(--active);
-}
-
-.card[data-status="complete"] {
-  border-left-color: var(--complete);
-}
-
-.card[data-status="recent"] {
-  border-left-color: var(--recent);
-}
-
-.card[data-status="today"] {
-  border-left-color: var(--today);
-}
-
 .card-title-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 10px;
-  align-items: start;
-  gap: 8px;
+  min-width: 0;
 }
 
 .card h3 {
@@ -643,30 +623,6 @@ body.is-resizing .panel-resize-handle::after {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 5px;
-  border-radius: 999px;
-  background: var(--done);
-}
-
-.card[data-status="running"] .status-dot {
-  background: var(--active);
-}
-
-.card[data-status="complete"] .status-dot {
-  background: var(--complete);
-}
-
-.card[data-status="recent"] .status-dot {
-  background: var(--recent);
-}
-
-.card[data-status="today"] .status-dot {
-  background: var(--today);
 }
 
 .prompt {
