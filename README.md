@@ -54,6 +54,8 @@ If you need a legacy EXE install:
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe -UseBasicParsing -OutFile $env:TEMP\AgentQueueInstaller.exe; & $env:TEMP\AgentQueueInstaller.exe"
 ```
 
+The EXE installer now opens a visible console window and keeps the progress visible while it installs and starts the dashboard.
+
 To install a specific version, use `-Version` (for example, `-Version 0.1.0`) if you clone and run locally.
 
 ## Run
