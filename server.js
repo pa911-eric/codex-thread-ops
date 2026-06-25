@@ -25,15 +25,15 @@ const sessionsRoot = path.join(codexHome, "sessions");
 const stateDbPath = path.join(codexHome, "state_5.sqlite");
 const goalsDbPath = path.join(codexHome, "goals_1.sqlite");
 const logsDbPath = path.join(codexHome, "logs_2.sqlite");
-function minutesFromEnv(name, fallback) {
-  const value = Number(process.env[name]);
+function minutesFromEnv(name, fallback, legacyName = null) {
+  const value = Number(process.env[name] ?? (legacyName ? process.env[legacyName] : undefined));
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 const statusWindows = {
-  completeMs: minutesFromEnv("CODEX_THREAD_OPS_COMPLETE_MINUTES", 10) * 60 * 1000,
-  recentMs: minutesFromEnv("CODEX_THREAD_OPS_RECENT_MINUTES", 120) * 60 * 1000,
-  runningStaleMs: minutesFromEnv("CODEX_THREAD_OPS_STALE_MINUTES", 15) * 60 * 1000,
+  completeMs: minutesFromEnv("AGENTQUEUE_COMPLETE_MINUTES", 10, "CODEX_THREAD_OPS_COMPLETE_MINUTES") * 60 * 1000,
+  recentMs: minutesFromEnv("AGENTQUEUE_RECENT_MINUTES", 120, "CODEX_THREAD_OPS_RECENT_MINUTES") * 60 * 1000,
+  runningStaleMs: minutesFromEnv("AGENTQUEUE_STALE_MINUTES", 15, "CODEX_THREAD_OPS_STALE_MINUTES") * 60 * 1000,
 };
 
 const sessionCache = new Map();
@@ -884,7 +884,7 @@ function listen(port, attemptsLeft = 12) {
 
   server.listen(port, () => {
     const address = server.address();
-    console.log(`Codex thread dashboard running at http://localhost:${address.port}`);
+    console.log(`AgentQueue running at http://localhost:${address.port}`);
   });
 }
 

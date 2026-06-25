@@ -194,11 +194,23 @@ h1 {
 
 .panel-title {
   min-width: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+}
+
+.panel-title img {
+  display: block;
+  width: 58px;
+  height: 34px;
+  object-fit: contain;
 }
 
 .panel-title h1 {
   font-size: 19px;
   line-height: 23px;
+  text-transform: none;
 }
 
 .panel-title p {

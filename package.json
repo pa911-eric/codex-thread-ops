@@ -1,13 +1,14 @@
 {
-  "name": "codex-thread-ops",
+  "name": "agentqueue",
   "version": "0.2.0",
   "private": true,
-  "description": "Local real-time operations dashboard for Codex desktop threads.",
+  "description": "Local real-time queue and usage dashboard for Codex agents.",
   "scripts": {
     "start": "node --no-warnings server.js"
   },
   "keywords": [
     "codex",
+    "agentqueue",
     "dashboard",
     "threads",
     "local-first"

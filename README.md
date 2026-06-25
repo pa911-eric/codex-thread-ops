@@ -1,8 +1,8 @@
-# Codex Thread Ops
+# AgentQueue
 
-A local, dependency-free operations dashboard for Codex desktop power users.
+A local, dependency-free queue and usage dashboard for Codex desktop power users.
 
-Codex Thread Ops reads your local Codex state and gives you a live flight-board view of what is running, what just finished, and what needs attention.
+AgentQueue reads your local Codex state and gives you a live board of what is running, what just finished, what needs attention, and how quickly current usage limits are burning down.
 
 ## Features
 
@@ -10,6 +10,8 @@ Codex Thread Ops reads your local Codex state and gives you a live flight-board 
 - Status lanes for `Running`, `Complete`, `Recent`, `Today`, and `Done`.
 - `Recent` is a strict 2-hour window.
 - Subagent-aware cards with parent thread titles, compact subagent identity, and child counts.
+- Usage limit panel with primary/secondary reset windows, burn rate, and burndown charts when local `token_count` events are available.
+- Right-click card menu for details, opening threads, copying IDs/links/titles, and marking local unread state as read.
 - Quick filters for review, risk, unread, projectless, and subagent work.
 - Sort modes for status priority, newest activity, longest running, and risk first.
 - Local-only data access. No telemetry, account service, or npm install required.
@@ -31,9 +33,9 @@ Optional configuration:
 ```powershell
 $env:CODEX_HOME = "$env:USERPROFILE\.codex"
 $env:PORT = "4173"
-$env:CODEX_THREAD_OPS_RECENT_MINUTES = "120"
-$env:CODEX_THREAD_OPS_COMPLETE_MINUTES = "10"
-$env:CODEX_THREAD_OPS_STALE_MINUTES = "15"
+$env:AGENTQUEUE_RECENT_MINUTES = "120"
+$env:AGENTQUEUE_COMPLETE_MINUTES = "10"
+$env:AGENTQUEUE_STALE_MINUTES = "15"
 node --no-warnings server.js
 ```
 
@@ -57,9 +59,11 @@ If the port is already in use, it automatically tries the next available port.
 | --- | --- | --- |
 | `CODEX_HOME` | `<home>/.codex` | Codex state directory to read. |
 | `PORT` | `4173` | Starting localhost port. |
-| `CODEX_THREAD_OPS_RECENT_MINUTES` | `120` | `Recent` status window. |
-| `CODEX_THREAD_OPS_COMPLETE_MINUTES` | `10` | `Complete` status window. |
-| `CODEX_THREAD_OPS_STALE_MINUTES` | `15` | Stale-running warning window. |
+| `AGENTQUEUE_RECENT_MINUTES` | `120` | `Recent` status window. |
+| `AGENTQUEUE_COMPLETE_MINUTES` | `10` | `Complete` status window. |
+| `AGENTQUEUE_STALE_MINUTES` | `15` | Stale-running warning window. |
+
+Legacy `CODEX_THREAD_OPS_*` names still work as fallbacks.
 
 ## Status Model
 
@@ -81,6 +85,8 @@ The dashboard reads local files only:
 - `%CODEX_HOME%\.codex-global-state.json`
 - `%CODEX_HOME%\process_manager\chat_processes.json`
 - `%CODEX_HOME%\sessions\**\*.jsonl`
+
+Usage metrics come from local `token_count` events in session JSONL files. If those events are not available, the usage panel stays hidden.
 
 If `CODEX_HOME` is not set, the app uses your platform home directory's `.codex` folder.
 

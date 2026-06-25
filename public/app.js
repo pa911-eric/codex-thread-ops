@@ -21,7 +21,8 @@ const state = {
   lastSnapshotAt: null,
 };
 
-const preferencesKey = "codex-thread-ops-preferences-v1";
+const preferencesKey = "agentqueue-preferences-v1";
+const legacyPreferencesKey = "codex-thread-ops-preferences-v1";
 const board = document.querySelector("#board");
 const columnTemplate = document.querySelector("#columnTemplate");
 const cardTemplate = document.querySelector("#cardTemplate");
@@ -62,7 +63,8 @@ const quickFilterDefs = [
 
 function readPreferences() {
   try {
-    return JSON.parse(localStorage.getItem(preferencesKey) || "{}");
+    const saved = localStorage.getItem(preferencesKey) || localStorage.getItem(legacyPreferencesKey);
+    return JSON.parse(saved || "{}");
   } catch {
     return {};
   }
