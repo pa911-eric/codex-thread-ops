@@ -366,14 +366,11 @@ body.is-resizing .panel-resize-handle::after {
 
 .metric-row.live {
   grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
-  align-items: center;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--outline);
 }
 
-.metric-row.live span:last-child {
+.metric-row.live span {
   color: var(--quiet);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11px;
@@ -445,24 +442,6 @@ body.is-resizing .panel-resize-handle::after {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.pulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--active);
-  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55);
-  animation: pulse 1.8s infinite;
-}
-
-@keyframes pulse {
-  70% {
-    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-  }
 }
 
 .toolbar {
