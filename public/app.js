@@ -30,6 +30,12 @@ const hideDone = document.querySelector("#hideDone");
 const statusFilters = document.querySelector("#statusFilters");
 const quickFilters = document.querySelector("#quickFilters");
 const sortMode = document.querySelector("#sortMode");
+const panelToggle = document.querySelector("#panelToggle");
+const closePanel = document.querySelector("#closePanel");
+const controlPanel = document.querySelector("#controlPanel");
+const panelBackdrop = document.querySelector("#panelBackdrop");
+const boardSummary = document.querySelector("#boardSummary");
+const activeFilters = document.querySelector("#activeFilters");
 const detailDrawer = document.querySelector("#detailDrawer");
 const closeDetail = document.querySelector("#closeDetail");
 const detailKicker = document.querySelector("#detailKicker");
@@ -393,6 +399,22 @@ function renderMetrics() {
   document.querySelector("#unreadThreads").textContent = summary.unread || 0;
   document.querySelector("#riskThreads").textContent = (summary.liveFullAccess || 0) + (summary.staleRunning || 0) + (summary.logErrors24h || 0);
   document.querySelector("#updatedAt").textContent = state.lastSnapshotAt ? `Updated ${formatClock(state.lastSnapshotAt)}` : "--";
+  boardSummary.textContent = `${summary.counts?.running || 0} running / ${summary.unread || 0} unread / ${(summary.liveFullAccess || 0) + (summary.staleRunning || 0) + (summary.logErrors24h || 0)} risk`;
+  activeFilters.textContent = describeFilters();
+}
+
+function describeFilters() {
+  const filters = [];
+  if (state.quickFilter !== "all") filters.push(quickFilterDefs.find((filter) => filter.id === state.quickFilter)?.label || state.quickFilter);
+  if (state.query.trim()) filters.push(`Search: ${state.query.trim()}`);
+  if (state.focusMode) filters.push("Focus");
+  if (state.hideDone) filters.push("Hide done");
+  if (state.activeStatuses.size !== columns.length) {
+    filters.push(Array.from(state.activeStatuses)
+      .map((id) => columns.find((column) => column.id === id)?.title || id)
+      .join(", "));
+  }
+  return filters.length ? filters.join(" / ") : "All threads";
 }
 
 function renderSpotlight(filtered) {
@@ -534,6 +556,14 @@ function closeDetails() {
   document.body.classList.remove("detail-open");
 }
 
+function setPanelOpen(open) {
+  document.body.classList.toggle("panel-open", open);
+  controlPanel.setAttribute("aria-hidden", String(!open));
+  panelToggle.setAttribute("aria-expanded", String(open));
+  panelBackdrop.hidden = !open;
+  if (open) search.focus();
+}
+
 function render() {
   renderStatusFilters();
   renderQuickFilters();
@@ -588,9 +618,14 @@ search.addEventListener("input", () => {
 });
 
 refresh.addEventListener("click", loadThreads);
+panelToggle.addEventListener("click", () => setPanelOpen(!document.body.classList.contains("panel-open")));
+closePanel.addEventListener("click", () => setPanelOpen(false));
+panelBackdrop.addEventListener("click", () => setPanelOpen(false));
 closeDetail.addEventListener("click", closeDetails);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !detailDrawer.hidden) closeDetails();
+  if (event.key !== "Escape") return;
+  if (!detailDrawer.hidden) closeDetails();
+  else if (document.body.classList.contains("panel-open")) setPanelOpen(false);
 });
 
 focusMode.addEventListener("click", () => {
