@@ -1,5 +1,7 @@
 # AgentQueue
 
+[![Install Now](https://img.shields.io/badge/Install%20Now-Run%20in%20Windows-0F172A?style=for-the-badge&logo=windows)](https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1)
+
 <img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
 
 A local, dependency-free queue and usage dashboard for Codex desktop power users.
