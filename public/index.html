@@ -9,7 +9,7 @@
   <body>
     <aside id="controlPanel" class="control-panel" aria-label="Dashboard controls">
       <header class="panel-header">
-        <button id="panelToggle" class="menu-button" type="button" aria-expanded="true" aria-controls="controlPanel" aria-label="Collapse controls" data-tooltip="Collapse controls" title="Collapse controls">
+        <button id="panelToggle" class="menu-button" type="button" aria-expanded="true" aria-controls="controlPanel" aria-label="Collapse controls" title="Collapse controls">
           <span aria-hidden="true"></span>
         </button>
         <div class="panel-title">
@@ -23,12 +23,12 @@
 
       <div class="panel-body">
         <section class="panel-section top-actions" aria-label="Dashboard actions">
-          <label class="search" data-tooltip="Filter visible threads by title, prompt, project, agent, or id" title="Filter visible threads by title, prompt, project, agent, or id">
+          <label class="search" title="Filter visible threads by title, prompt, project, agent, or id">
             <span>Search</span>
             <input id="search" type="search" placeholder="thread, project, prompt, id" autocomplete="off" />
           </label>
-          <button id="focusMode" type="button" aria-pressed="false" data-tooltip="Hide quiet older threads unless they need review" title="Hide quiet older threads unless they need review">Focus</button>
-          <button id="refresh" type="button" data-tooltip="Reload local Codex thread data now" title="Reload local Codex thread data now">Refresh</button>
+          <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
+          <button id="refresh" type="button" title="Reload local Codex thread data now">Refresh</button>
         </section>
 
         <section class="panel-section metric-list" aria-label="Dashboard status">
@@ -67,7 +67,7 @@
               <div id="statusFilters" class="segmented compact"></div>
             </div>
           </div>
-          <label class="select-wrap" data-tooltip="Choose how cards are ordered inside columns" title="Choose how cards are ordered inside columns">
+          <label class="select-wrap" title="Choose how cards are ordered inside columns">
             <span>Sort</span>
             <select id="sortMode">
               <option value="priority">Status priority</option>
@@ -76,7 +76,7 @@
               <option value="risk">Risk first</option>
             </select>
           </label>
-          <label class="toggle" data-tooltip="Hide the Done column and older completed threads" title="Hide the Done column and older completed threads">
+          <label class="toggle" title="Hide the Done column and older completed threads">
             <input id="hideDone" type="checkbox" />
             <span>Hide Done</span>
           </label>

@@ -290,41 +290,6 @@ h1 {
   top: 5px;
 }
 
-[data-tooltip] {
-  position: relative;
-}
-
-[data-tooltip]:hover::after,
-[data-tooltip]:focus-visible::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  z-index: 40;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: 260px;
-  padding: 6px 8px;
-  border: 1px solid var(--outline-strong);
-  border-radius: var(--radius);
-  background: var(--primary);
-  color: #ffffff;
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-  pointer-events: none;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
-}
-
-.sidebar-collapsed .menu-button[data-tooltip]:hover::after,
-.sidebar-collapsed .menu-button[data-tooltip]:focus-visible::after {
-  left: calc(100% + 10px);
-  bottom: 50%;
-  transform: translateY(50%);
-}
-
 .search {
   display: grid;
   grid-template-columns: auto minmax(120px, 1fr);

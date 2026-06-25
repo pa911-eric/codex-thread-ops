@@ -316,7 +316,6 @@ function renderStatusFilters() {
     button.dataset.status = column.id;
     button.textContent = column.title;
     button.title = `Toggle ${column.title} column`;
-    button.dataset.tooltip = button.title;
     button.setAttribute("aria-pressed", String(state.activeStatuses.has(column.id)));
     button.addEventListener("click", () => {
       if (state.activeStatuses.has(column.id)) state.activeStatuses.delete(column.id);
@@ -336,7 +335,6 @@ function renderQuickFilters() {
     button.type = "button";
     button.textContent = filter.label;
     button.title = filter.tip;
-    button.dataset.tooltip = filter.tip;
     button.setAttribute("aria-pressed", String(state.quickFilter === filter.id));
     button.addEventListener("click", () => {
       state.quickFilter = filter.id;
@@ -763,7 +761,6 @@ function setPanelCollapsed(collapsed, persist = true) {
   panelToggle.setAttribute("aria-expanded", String(!collapsed));
   panelToggle.setAttribute("aria-label", collapsed ? "Expand controls" : "Collapse controls");
   panelToggle.title = collapsed ? "Expand controls" : "Collapse controls";
-  panelToggle.dataset.tooltip = panelToggle.title;
   if (persist) savePreferences();
 }
 
