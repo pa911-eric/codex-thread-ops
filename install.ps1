@@ -46,6 +46,25 @@ function Open-Browser($url) {
   }
 }
 
+$initialInstallPath = $InstallPath
+$requestedInstallPath = $InstallPath
+
+if (Test-Path $requestedInstallPath) {
+  Write-Step "Found existing installation at $requestedInstallPath"
+  try {
+    Remove-Item -Recurse -Force -LiteralPath $requestedInstallPath -ErrorAction Stop
+    Write-Step "Removed existing installation."
+  } catch {
+    $fallbackSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
+    $fallbackPath = Join-Path (Split-Path $requestedInstallPath -Parent) "AgentQueue-$fallbackSuffix"
+    Write-Step "Could not replace existing install (likely in use)."
+    Write-Step "Switching to alternate install location so setup can continue:"
+    Write-Step "$fallbackPath"
+    Write-Step "Please close AgentQueue and rerun installer if you want to update $requestedInstallPath."
+    $requestedInstallPath = $fallbackPath
+  }
+}
+
 Write-Step "Starting AgentQueue installer for $tag"
 Write-Step "Installer log: $logPath"
 Write-Step "Downloading $archiveUrl"
@@ -70,16 +89,17 @@ try {
     }
   }
 
-  if (Test-Path $InstallPath) {
-    Write-Step "Replacing existing installation at $InstallPath"
-    Remove-Item -Recurse -Force -LiteralPath $InstallPath
-  }
-
-  New-Item -ItemType Directory -Path $InstallPath | Out-Null
-  Copy-Item -Path (Join-Path $repoRoot "*") -Destination $InstallPath -Recurse -Force
+  New-Item -ItemType Directory -Path $requestedInstallPath | Out-Null
+  Copy-Item -Path (Join-Path $repoRoot "*") -Destination $requestedInstallPath -Recurse -Force
+  $InstallPath = $requestedInstallPath
 
   Write-Step "Installed to: $InstallPath"
   Write-Step "Launcher: $InstallPath\\start-dashboard.cmd"
+  if ($initialInstallPath -ne $requestedInstallPath) {
+    Write-Step "Note: your previous install was not replaced because it appears in use."
+    Write-Step "To update it, close all AgentQueue windows and reinstall to:"
+    Write-Step "$initialInstallPath"
+  }
 
   if ($Launch) {
     Write-Step "Launching AgentQueue and opening dashboard in browser..."

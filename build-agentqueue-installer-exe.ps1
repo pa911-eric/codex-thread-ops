@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 $resolvedOutput = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $PSScriptRoot $OutputPath }
 $OutputPath = $resolvedOutput
 
-$workDir = Join-Path $env:TEMP "agentqueue-installer-exe"
+$workDir = Join-Path $env:TEMP ("agentqueue-installer-exe-" + [Guid]::NewGuid().ToString("N"))
 $staging = Join-Path $workDir "staging"
 $sedPath = Join-Path $workDir "agentqueue-installer.sed"
 $installerExe = Join-Path $staging "AgentQueueInstaller.exe"
