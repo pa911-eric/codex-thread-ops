@@ -526,6 +526,59 @@ body.is-resizing .panel-resize-handle::after {
   white-space: nowrap;
 }
 
+.usage-detail {
+  display: grid;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.usage-detail[hidden] {
+  display: none;
+}
+
+.usage-detail-row {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.usage-detail-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.usage-detail-top strong {
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 700;
+}
+
+.usage-detail-top span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.usage-detail .usage-bar {
+  height: 3px;
+}
+
+.usage-detail-row p {
+  color: var(--quiet);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  line-height: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pulse {
   width: 8px;
   height: 8px;

@@ -57,6 +57,7 @@ const usagePanel = document.querySelector("#usagePanel");
 const usageHeadline = document.querySelector("#usageHeadline");
 const usagePlan = document.querySelector("#usagePlan");
 const usageWindows = document.querySelector("#usageWindows");
+const usageDetail = document.querySelector("#usageDetail");
 let menuThreadId = null;
 
 const quickFilterDefs = [
@@ -508,6 +509,33 @@ function usageResetText(window) {
   return `Resets ${value}`;
 }
 
+function usageShortLabel(window) {
+  if (!window) return "Usage";
+  if (window.windowMinutes <= 360) return `${Math.round(window.windowMinutes / 60)}h`;
+  if (window.windowMinutes >= 7 * 24 * 60) return "Weekly";
+  return window.label || "Usage";
+}
+
+function usageShortResetText(window) {
+  if (window?.resetInMs == null) return "reset --";
+  return `reset ${formatDurationMs(window.resetInMs)}`;
+}
+
+function usageExhaustionText(window) {
+  if (!window) return "empty --";
+  if (window.exhaustionConfidence === "after reset") return "not before reset";
+  if (window.exhaustionConfidence === "flat") return "flat";
+  if (window.exhaustionConfidence === "insufficient") return "need samples";
+  if (window.exhaustionInMs == null) return "empty --";
+  return `empty ${formatDurationMs(window.exhaustionInMs)}`;
+}
+
+function usageBurnText(window) {
+  const burn = Number(window?.slopePercentPerHour);
+  if (!Number.isFinite(burn) || burn <= 0) return "burn --";
+  return `burn ${burn.toFixed(1)}%/h`;
+}
+
 function renderUsageWindow(window) {
   if (!window) return "";
   const remaining = formatPercent(window.remainingPercent);
@@ -529,11 +557,31 @@ function renderUsageWindow(window) {
   `;
 }
 
+function renderUsageDetailWindow(window) {
+  if (!window) return "";
+  const usedPercent = Math.max(0, Math.min(100, window.usedPercent));
+  const remaining = formatPercent(window.remainingPercent);
+  const label = usageShortLabel(window);
+  const title = `${usageLimitLabel(window)}. ${usageBurnText(window)}. ${usageExhaustionText(window)}. ${usageShortResetText(window)}.`;
+
+  return `
+    <article class="usage-detail-row" title="${escapeHtml(title)}">
+      <div class="usage-detail-top">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(remaining)} left</span>
+      </div>
+      <div class="usage-bar" aria-hidden="true"><span style="width: ${usedPercent}%"></span></div>
+      <p>${escapeHtml(usageBurnText(window))} / ${escapeHtml(usageExhaustionText(window))} / ${escapeHtml(usageShortResetText(window))}</p>
+    </article>
+  `;
+}
+
 function renderUsage() {
   const usage = state.usage;
   if (!usage?.available) {
     usagePanel.hidden = true;
     boardTopbar.hidden = true;
+    usageDetail.hidden = true;
     return;
   }
 
@@ -543,6 +591,9 @@ function renderUsage() {
   usageHeadline.textContent = "Usage limits";
   usagePlan.textContent = usage.planType || usage.limitId || "";
   usageWindows.innerHTML = [renderUsageWindow(usage.primary), renderUsageWindow(usage.secondary)].filter(Boolean).join("");
+  const detailRows = [renderUsageDetailWindow(usage.primary), renderUsageDetailWindow(usage.secondary)].filter(Boolean).join("");
+  usageDetail.hidden = !detailRows;
+  usageDetail.innerHTML = detailRows;
 }
 
 function renderBoard(filtered) {
