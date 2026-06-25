@@ -14,10 +14,7 @@
         </button>
         <div class="panel-title">
           <img src="/agentqueue-logo.png" alt="" />
-          <div>
-            <h1>AgentQueue</h1>
-            <p id="connectionState">Live</p>
-          </div>
+          <h1>AgentQueue</h1>
         </div>
       </header>
 
@@ -43,17 +40,6 @@
           <span id="completeThreads" hidden>0</span>
           <span id="todayThreads" hidden>0</span>
           <span id="doneThreads" hidden>0</span>
-        </section>
-
-        <section id="usagePanel" class="panel-section usage-panel" hidden aria-label="Usage limits">
-          <header>
-            <div>
-              <p class="eyebrow">Usage</p>
-              <strong id="usageHeadline">Waiting for local usage data</strong>
-            </div>
-            <span id="usagePlan"></span>
-          </header>
-          <div id="usageWindows" class="usage-windows"></div>
         </section>
 
         <section class="panel-section toolbar" aria-label="Board filters">
@@ -87,12 +73,16 @@
     </aside>
 
     <main class="shell">
-      <header class="board-topbar">
-        <div>
-          <strong>Board</strong>
-          <span id="boardSummary">Loading local Codex threads...</span>
-        </div>
-        <p id="activeFilters" class="active-filters">All threads</p>
+      <header id="boardTopbar" class="board-topbar">
+        <section id="usagePanel" class="usage-strip" hidden aria-label="Usage limits">
+          <div class="usage-strip-summary">
+            <strong id="usageHeadline">Usage</strong>
+            <span id="usagePlan"></span>
+          </div>
+          <div id="usageWindows" class="usage-windows"></div>
+        </section>
+        <span id="boardSummary" class="status-message" hidden></span>
+        <p id="activeFilters" hidden></p>
       </header>
 
       <section id="board" class="board" aria-label="Codex thread board"></section>

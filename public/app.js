@@ -43,6 +43,7 @@ const sortMode = document.querySelector("#sortMode");
 const panelToggle = document.querySelector("#panelToggle");
 const controlPanel = document.querySelector("#controlPanel");
 const panelResizeHandle = document.querySelector("#panelResizeHandle");
+const boardTopbar = document.querySelector("#boardTopbar");
 const boardSummary = document.querySelector("#boardSummary");
 const activeFilters = document.querySelector("#activeFilters");
 const detailDrawer = document.querySelector("#detailDrawer");
@@ -483,68 +484,47 @@ function renderMetrics() {
   document.querySelector("#unreadThreads").textContent = summary.unread || 0;
   document.querySelector("#riskThreads").textContent = (summary.liveFullAccess || 0) + (summary.staleRunning || 0) + (summary.logErrors24h || 0);
   document.querySelector("#updatedAt").textContent = state.lastSnapshotAt ? `Updated ${formatClock(state.lastSnapshotAt)}` : "--";
-  boardSummary.textContent = `${summary.counts?.running || 0} running / ${summary.unread || 0} unread / ${(summary.liveFullAccess || 0) + (summary.staleRunning || 0) + (summary.logErrors24h || 0)} risk`;
-  activeFilters.textContent = describeFilters();
+  boardSummary.textContent = "";
+  boardSummary.hidden = true;
+  activeFilters.textContent = "";
 }
 
-function usageEstimateText(window) {
-  if (!window) return "No estimate";
-  if (window.exhaustionConfidence === "after reset") return "Not before reset";
-  if (window.exhaustionConfidence === "flat") return "Flat use";
-  if (window.exhaustionConfidence === "insufficient") return "Need more samples";
-  if (window.exhaustionInMs == null) return "No estimate";
-  return `${formatDurationMs(window.exhaustionInMs)} to empty`;
+function usageLimitLabel(window) {
+  if (!window) return "Usage limit";
+  if (window.windowMinutes <= 360) return `${Math.round(window.windowMinutes / 60)} hour usage limit`;
+  if (window.windowMinutes >= 7 * 24 * 60) return "Weekly usage limit";
+  return `${window.label || "Usage"} usage limit`;
 }
 
-function renderUsageChart(points) {
-  const width = 210;
-  const height = 48;
-  const usableWidth = width - 8;
-  const usableHeight = height - 8;
-  const chartPoints = (points || []).slice(-36);
-
-  if (chartPoints.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true"><line x1="4" y1="${height - 6}" x2="${width - 4}" y2="${height - 6}" /></svg>`;
-  }
-
-  const times = chartPoints.map((point) => new Date(point.at).getTime());
-  const minTime = Math.min(...times);
-  const maxTime = Math.max(...times);
-  const span = Math.max(1, maxTime - minTime);
-  const path = chartPoints.map((point) => {
-    const x = 4 + ((new Date(point.at).getTime() - minTime) / span) * usableWidth;
-    const y = 4 + ((100 - point.remainingPercent) / 100) * usableHeight;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-
-  return `
-    <svg viewBox="0 0 ${width} ${height}" aria-hidden="true">
-      <line x1="4" y1="4" x2="${width - 4}" y2="4" />
-      <line x1="4" y1="${height - 6}" x2="${width - 4}" y2="${height - 6}" />
-      <polyline points="${path}" />
-    </svg>
-  `;
+function usageResetText(window) {
+  if (!window) return "Reset pending";
+  const resetAt = window.resetsAt || (window.resetInMs == null ? null : new Date(Date.now() + window.resetInMs).toISOString());
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) return "Reset pending";
+  const now = new Date();
+  const value = date.toDateString() === now.toDateString()
+    ? date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `Resets ${value}`;
 }
 
 function renderUsageWindow(window) {
   if (!window) return "";
-  const resetText = window.resetInMs == null ? "--" : formatDurationMs(window.resetInMs);
-  const slope = window.slopePercentPerHour ? `${window.slopePercentPerHour.toFixed(1)}%/h` : "--";
+  const remaining = formatPercent(window.remainingPercent);
+  const usedPercent = Math.max(0, Math.min(100, window.usedPercent));
+  const label = usageLimitLabel(window);
+  const resetText = usageResetText(window);
 
   return `
-    <article class="usage-window">
-      <header>
-        <span>${escapeHtml(window.label)}</span>
-        <strong>${escapeHtml(formatPercent(window.remainingPercent))} left</strong>
-      </header>
-      <div class="usage-bar" aria-hidden="true"><span style="width: ${Math.max(0, Math.min(100, window.usedPercent))}%"></span></div>
-      ${renderUsageChart(window.points)}
-      <dl>
-        <div><dt>Used</dt><dd>${escapeHtml(formatPercent(window.usedPercent))}</dd></div>
-        <div><dt>Reset</dt><dd>${escapeHtml(resetText)}</dd></div>
-        <div><dt>Burn</dt><dd>${escapeHtml(slope)}</dd></div>
-        <div><dt>Estimate</dt><dd>${escapeHtml(usageEstimateText(window))}</dd></div>
-      </dl>
+    <article class="usage-window" title="${escapeHtml(`${label}. ${resetText}. ${remaining} left.`)}">
+      <div class="usage-window-main">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(resetText)}</span>
+      </div>
+      <div class="usage-window-visual">
+        <div class="usage-bar" aria-hidden="true"><span style="width: ${usedPercent}%"></span></div>
+        <span>${escapeHtml(remaining)} left</span>
+      </div>
     </article>
   `;
 }
@@ -553,28 +533,16 @@ function renderUsage() {
   const usage = state.usage;
   if (!usage?.available) {
     usagePanel.hidden = true;
+    boardTopbar.hidden = true;
     return;
   }
 
   const primary = usage.primary;
+  boardTopbar.hidden = false;
   usagePanel.hidden = false;
-  usageHeadline.textContent = primary ? `${formatPercent(primary.remainingPercent)} primary remaining` : "Usage data available";
+  usageHeadline.textContent = "Usage limits";
   usagePlan.textContent = usage.planType || usage.limitId || "";
   usageWindows.innerHTML = [renderUsageWindow(usage.primary), renderUsageWindow(usage.secondary)].filter(Boolean).join("");
-}
-
-function describeFilters() {
-  const filters = [];
-  if (state.quickFilter !== "all") filters.push(quickFilterDefs.find((filter) => filter.id === state.quickFilter)?.label || state.quickFilter);
-  if (state.query.trim()) filters.push(`Search: ${state.query.trim()}`);
-  if (state.focusMode) filters.push("Focus");
-  if (state.hideDone) filters.push("Hide done");
-  if (state.activeStatuses.size !== columns.length) {
-    filters.push(Array.from(state.activeStatuses)
-      .map((id) => columns.find((column) => column.id === id)?.title || id)
-      .join(", "));
-  }
-  return filters.length ? filters.join(" / ") : "All threads";
 }
 
 function renderBoard(filtered) {
@@ -882,7 +850,6 @@ async function applySnapshot(data) {
   state.summary = data.summary || null;
   state.usage = data.usage || null;
   state.lastSnapshotAt = data.refreshedAt || new Date().toISOString();
-  document.querySelector("#connectionState").textContent = data.error ? "Issue" : "Live";
   render();
 }
 
@@ -892,7 +859,8 @@ async function loadThreads() {
     const response = await fetch("/api/threads");
     applySnapshot(await response.json());
   } catch (error) {
-    document.querySelector("#connectionState").textContent = "Offline";
+    boardTopbar.hidden = false;
+    boardSummary.hidden = false;
     boardSummary.textContent = error.message;
   } finally {
     refresh.disabled = false;
@@ -910,9 +878,6 @@ function connectEvents() {
   source.addEventListener("snapshot", (event) => {
     applySnapshot(JSON.parse(event.data));
   });
-  source.addEventListener("error", () => {
-    document.querySelector("#connectionState").textContent = "Reconnecting";
-  });
 }
 
 search.addEventListener("input", () => {
@@ -928,6 +893,8 @@ cardMenu.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
   handleMenuAction(button.dataset.action).catch((error) => {
+    boardTopbar.hidden = false;
+    boardSummary.hidden = false;
     boardSummary.textContent = error.message;
   });
 });
