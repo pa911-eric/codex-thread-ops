@@ -85,6 +85,18 @@
       <section id="board" class="board" aria-label="Codex thread board"></section>
     </main>
 
+    <aside id="detailDrawer" class="detail-drawer" hidden aria-label="Thread details">
+      <header>
+        <div>
+          <p id="detailKicker" class="eyebrow">Thread</p>
+          <h2 id="detailTitle"></h2>
+          <p id="detailSubtitle"></p>
+        </div>
+        <button id="closeDetail" type="button" aria-label="Close details">Close</button>
+      </header>
+      <div id="detailContent" class="detail-content"></div>
+    </aside>
+
     <template id="columnTemplate">
       <section class="column">
         <header>
@@ -112,9 +124,11 @@
         </div>
         <div class="meta-grid"></div>
         <div class="badges"></div>
+        <div class="child-summary"></div>
         <footer>
           <time></time>
           <div class="card-actions">
+            <button type="button" class="details">Details</button>
             <a class="open-link" href="#">Open</a>
             <button type="button" class="copy">Copy ID</button>
           </div>

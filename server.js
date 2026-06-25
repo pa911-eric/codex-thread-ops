@@ -24,6 +24,7 @@ const processManagerPath = path.join(codexHome, "process_manager", "chat_process
 const sessionsRoot = path.join(codexHome, "sessions");
 const stateDbPath = path.join(codexHome, "state_5.sqlite");
 const goalsDbPath = path.join(codexHome, "goals_1.sqlite");
+const logsDbPath = path.join(codexHome, "logs_2.sqlite");
 function minutesFromEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -375,6 +376,31 @@ function readGoals() {
   return goals;
 }
 
+function readLogHealth() {
+  const health = new Map();
+  const rows = readSqliteRows(logsDbPath, `
+    select thread_id,
+           sum(case when level = 'ERROR' then 1 else 0 end) as errors_24h,
+           sum(case when level = 'WARN' then 1 else 0 end) as warnings_24h,
+           max(ts) as last_log_ts
+    from logs
+    where thread_id is not null
+      and thread_id != ''
+      and ts > strftime('%s','now','-24 hours')
+    group by thread_id
+  `);
+
+  for (const row of rows) {
+    health.set(row.thread_id, {
+      errors24h: Number(row.errors_24h || 0),
+      warnings24h: Number(row.warnings_24h || 0),
+      lastLogAt: epochToIso(row.last_log_ts),
+    });
+  }
+
+  return health;
+}
+
 function getStatus({ activityAt, session }, now = Date.now()) {
   const activityMs = new Date(activityAt || 0).getTime();
   const taskCompleteMs = new Date(session?.taskCompleteAt || 0).getTime();
@@ -406,7 +432,7 @@ function toLocalDateKey(value) {
 }
 
 function enrichThread(thread, context) {
-  const { state, sessionFilesById, processRowsByThread, spawnEdges, goals } = context;
+  const { state, sessionFilesById, processRowsByThread, spawnEdges, goals, logHealth } = context;
   const atomState = state["electron-persisted-atom-state"] || {};
   const permissionsById = state["heartbeat-thread-permissions-by-id"] || atomState["heartbeat-thread-permissions-by-id"] || {};
   const unreadByHost = state["unread-thread-ids-by-host-v1"] || atomState["unread-thread-ids-by-host-v1"] || {};
@@ -422,6 +448,7 @@ function enrichThread(thread, context) {
   const session = context.sessionSummaries.get(thread.id) || null;
   const prompts = promptHistory[thread.id] || [];
   const goal = goals.get(thread.id) || null;
+  const logs = logHealth.get(thread.id) || { errors24h: 0, warnings24h: 0, lastLogAt: null };
   const childThreads = spawnEdges.childrenByParent.get(thread.id) || [];
   const parent = spawnEdges.parentByChild.get(thread.id) || {};
   const parentThreadId = thread.parentThreadId || parent.parentThreadId || null;
@@ -473,6 +500,7 @@ function enrichThread(thread, context) {
     liveProcessCount: liveProcesses.length,
     liveProcesses,
     processCount: processes.length,
+    logHealth: logs,
     goal,
     tokensUsed: thread.tokensUsed || 0,
     gitBranch: thread.gitBranch || null,
@@ -495,6 +523,8 @@ function computeSummary(threads, refreshedAt) {
     unread: threads.filter((thread) => thread.unread).length,
     liveProcesses: threads.reduce((sum, thread) => sum + thread.liveProcessCount, 0),
     liveFullAccess: threads.filter((thread) => thread.liveProcessCount && thread.fullAccess).length,
+    logWarnings24h: threads.reduce((sum, thread) => sum + (thread.logHealth?.warnings24h || 0), 0),
+    logErrors24h: threads.reduce((sum, thread) => sum + (thread.logHealth?.errors24h || 0), 0),
     fullAccess: threads.filter((thread) => thread.fullAccess).length,
     projectless: threads.filter((thread) => thread.projectless).length,
     subagents: threads.filter((thread) => thread.threadSource === "subagent").length,
@@ -528,13 +558,14 @@ async function loadThreads() {
   const unique = new Map(threadsSource.map((thread) => [thread.id, thread]));
   const spawnEdges = readSpawnEdges();
   const goals = readGoals();
+  const logHealth = readLogHealth();
 
   const sessionSummaries = new Map();
   await Promise.all(Array.from(unique.entries()).map(async ([id, thread]) => {
     sessionSummaries.set(id, await readSessionSummary(thread.rolloutPath || sessionFilesById.get(id)));
   }));
 
-  const context = { state, sessionFilesById, processRowsByThread, sessionSummaries, spawnEdges, goals };
+  const context = { state, sessionFilesById, processRowsByThread, sessionSummaries, spawnEdges, goals, logHealth };
   const threads = Array.from(unique.values())
     .map((thread) => enrichThread(thread, context))
     .sort((a, b) => {
@@ -548,6 +579,7 @@ async function loadThreads() {
     indexPath,
     stateDbPath: sqliteThreads.length ? stateDbPath : null,
     goalsDbPath: goals.size ? goalsDbPath : null,
+    logsDbPath: logHealth.size ? logsDbPath : null,
     globalStatePath,
     processManagerPath,
     sessionsRoot,

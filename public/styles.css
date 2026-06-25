@@ -390,21 +390,23 @@ h1 {
 .card {
   min-width: 0;
   display: grid;
-  gap: 8px;
-  min-height: 196px;
-  padding: 10px;
+  gap: 7px;
+  min-height: 158px;
+  padding: 11px;
   background: var(--surface);
   border: 1px solid var(--outline);
   border-left: 4px solid var(--done);
   border-radius: var(--radius);
+  cursor: pointer;
 }
 
 .card:hover {
   border-color: var(--primary);
+  box-shadow: 0 2px 0 rgba(15, 23, 42, 0.06);
 }
 
 .card.is-subagent {
-  background: linear-gradient(90deg, var(--surface-low), var(--surface) 34px);
+  background: linear-gradient(90deg, #f6fbff, var(--surface) 28px);
 }
 
 .card.is-subagent h3 {
@@ -486,35 +488,38 @@ h1 {
 }
 
 .prompt {
-  min-height: 36px;
+  min-height: 18px;
   margin-top: 4px;
   color: var(--muted);
   font-size: 13px;
   line-height: 18px;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
 .meta-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
 }
 
 .meta-item {
-  min-height: 42px;
-  padding: 7px;
-  background: var(--surface-low);
-  border: 1px solid #d3e4fe;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
   border-radius: var(--radius);
 }
 
 .meta-item span {
-  display: block;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 14px;
   letter-spacing: 0.05em;
@@ -522,12 +527,11 @@ h1 {
 }
 
 .meta-item strong {
-  display: block;
-  margin-top: 2px;
+  min-width: 0;
   color: var(--ink);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 11px;
+  line-height: 14px;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -535,18 +539,18 @@ h1 {
 .badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 4px;
 }
 
 .badge {
   max-width: 100%;
-  padding: 2px 7px;
+  padding: 1px 6px;
   border: 1px solid var(--outline);
   border-radius: var(--radius-soft);
   background: var(--surface-low);
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 10px;
+  line-height: 15px;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -591,6 +595,16 @@ h1 {
   background: #e0fff0;
 }
 
+.child-summary {
+  color: var(--quiet);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card footer {
   display: flex;
   align-items: center;
@@ -626,6 +640,174 @@ time {
   padding: 18px 8px;
   color: var(--muted);
   text-align: center;
+}
+
+.detail-drawer[hidden] {
+  display: none;
+}
+
+.detail-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(440px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--outline-strong);
+  box-shadow: -12px 0 34px rgba(15, 23, 42, 0.14);
+}
+
+.detail-drawer > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 18px;
+  border-bottom: 1px solid var(--outline);
+  background: var(--surface-low);
+}
+
+.detail-drawer h2 {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+#detailSubtitle {
+  margin-top: 4px;
+  color: var(--quiet);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.detail-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 22px;
+}
+
+.detail-badges {
+  margin-bottom: 14px;
+}
+
+.detail-section,
+.detail-grid {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--outline);
+}
+
+.detail-section h3 {
+  margin-bottom: 7px;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.detail-section p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.detail-row span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.detail-row strong {
+  min-width: 0;
+  color: var(--ink);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.child-list {
+  display: grid;
+  gap: 7px;
+}
+
+.child-row {
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  padding: 9px;
+  text-align: left;
+  border-color: var(--outline);
+}
+
+.child-row span {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.child-row strong,
+.child-row small {
+  min-width: 0;
+  color: var(--muted);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-section pre {
+  max-height: 150px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 9px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: #f7f9fc;
+  color: var(--ink);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--outline);
+}
+
+.detail-actions a,
+.detail-actions button {
+  display: inline-grid;
+  place-items: center;
+  padding: 0 11px;
 }
 
 @media (max-width: 1360px) {
@@ -672,5 +854,26 @@ time {
   .toggle,
   .select-wrap {
     justify-content: center;
+  }
+
+  .card footer,
+  .detail-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .card-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .detail-drawer {
+    width: 100vw;
+    border-left: 0;
+  }
+
+  .detail-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
   }
 }
