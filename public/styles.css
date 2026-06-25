@@ -586,6 +586,11 @@ body.is-resizing .panel-resize-handle::after {
   box-shadow: 0 2px 0 rgba(15, 23, 42, 0.06);
 }
 
+.card.is-unread {
+  border-color: #1f7a5f;
+  box-shadow: inset 3px 0 0 #1f7a5f;
+}
+
 .card.is-subagent {
   background: linear-gradient(90deg, #f6fbff, var(--surface) 28px);
 }
@@ -600,6 +605,31 @@ body.is-resizing .panel-resize-handle::after {
 
 .card-title-row {
   min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-title-row > div {
+  min-width: 0;
+}
+
+.unread-indicator {
+  flex: 0 0 auto;
+  max-width: 88px;
+  padding: 3px 6px;
+  border: 1px solid #4edea3;
+  border-radius: 999px;
+  background: #e0fff0;
+  color: #005236;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 12px;
+  text-align: center;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .card h3 {
