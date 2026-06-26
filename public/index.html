@@ -10,7 +10,7 @@
     <link rel="manifest" href="/site.webmanifest" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
+  <body class="timeline-panel-collapsed">
     <aside id="controlPanel" class="control-panel" aria-label="Dashboard controls">
       <header class="panel-header">
         <div class="panel-title">
@@ -30,6 +30,7 @@
           </label>
           <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
           <button id="refresh" type="button" title="Reload local Codex thread data now">Refresh</button>
+          <a class="open-link" href="/api/docs" target="_blank" rel="noreferrer" title="Open local AgentQueue API documentation">API Docs</a>
         </section>
 
         <section class="panel-section metric-list" aria-label="Dashboard status">
@@ -96,6 +97,14 @@
         </section>
 
         <section id="usageDetail" class="panel-section usage-detail" hidden aria-label="Burndown detail"></section>
+
+        <section class="panel-section integration-strip" aria-label="Thread webhook">
+          <div>
+            <p class="eyebrow">Webhook</p>
+            <strong id="webhookState">Disabled</strong>
+          </div>
+          <button id="openWebhookSettings" type="button" title="Configure thread status webhooks">Configure</button>
+        </section>
       </div>
 
       <div id="panelResizeHandle" class="panel-resize-handle" role="separator" aria-label="Resize controls" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="620" aria-valuenow="348" tabindex="0" title="Drag to resize controls"></div>
@@ -104,8 +113,25 @@
     <main class="shell">
       <nav id="columnSwitcher" class="column-switcher" aria-label="Column switcher"></nav>
       <section id="board" class="board" aria-label="Codex thread board"></section>
-      <section id="timeline" class="timeline" aria-label="Thread interaction timeline"></section>
     </main>
+
+    <aside id="timelinePanel" class="timeline-panel" aria-label="Thread interaction timeline collapsed">
+      <header class="panel-header">
+        <div class="panel-title timeline-panel-title">
+          <span class="panel-mark" aria-hidden="true"></span>
+          <h2>Timeline</h2>
+        </div>
+        <button id="timelinePanelToggle" class="menu-button" type="button" aria-expanded="false" aria-controls="timelinePanel" aria-label="Expand timeline" title="Expand timeline">
+          <span aria-hidden="true"></span>
+        </button>
+      </header>
+
+      <div class="panel-body timeline-panel-body">
+        <section id="timeline" class="timeline" aria-label="Thread interaction timeline"></section>
+      </div>
+
+      <div id="timelinePanelResizeHandle" class="panel-resize-handle timeline-panel-resize-handle" role="separator" aria-label="Resize timeline" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="620" aria-valuenow="360" tabindex="0" title="Drag to resize timeline"></div>
+    </aside>
 
     <aside id="detailDrawer" class="detail-drawer" hidden aria-label="Thread details">
       <header>
@@ -118,6 +144,94 @@
       </header>
       <div id="detailContent" class="detail-content"></div>
     </aside>
+
+    <div id="webhookModal" class="modal-backdrop" hidden>
+      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="webhookModalTitle">
+        <header>
+          <div>
+            <p class="eyebrow">Integration</p>
+            <h2 id="webhookModalTitle">Thread Webhook</h2>
+          </div>
+          <button id="closeWebhookSettings" type="button" aria-label="Close webhook settings">Close</button>
+        </header>
+
+        <form id="webhookForm" class="webhook-form">
+          <div class="webhook-head">
+            <div>
+              <p class="eyebrow">Delivery</p>
+              <strong id="webhookModalState">Disabled</strong>
+            </div>
+            <label class="switch" title="Enable thread status webhooks">
+              <input id="webhookEnabled" type="checkbox" />
+              <span>On</span>
+            </label>
+          </div>
+
+          <label class="field" title="HTTP endpoint that receives status-change POST requests">
+            <span>Endpoint</span>
+            <input id="webhookEndpoint" type="url" placeholder="https://example.com/hook" autocomplete="off" />
+          </label>
+
+          <div class="webhook-grid">
+            <label class="toggle compact" title="Send events for subagent threads">
+              <input id="webhookIncludeSubagents" type="checkbox" />
+              <span>Subagents</span>
+            </label>
+            <label class="field token-field" title="Optional HMAC signing token">
+              <span>Token</span>
+              <input id="webhookSigningToken" type="password" autocomplete="new-password" />
+            </label>
+          </div>
+
+          <section class="webhook-group" aria-label="Webhook statuses">
+            <p class="eyebrow">Status Triggers</p>
+            <div class="webhook-statuses">
+              <label><input type="checkbox" data-webhook-status="running" /> Running</label>
+              <label><input type="checkbox" data-webhook-status="complete" /> Complete</label>
+              <label><input type="checkbox" data-webhook-status="recent" /> Recent</label>
+              <label><input type="checkbox" data-webhook-status="today" /> Today</label>
+              <label><input type="checkbox" data-webhook-status="done" /> Done</label>
+            </div>
+          </section>
+
+          <section class="webhook-group">
+            <p class="eyebrow">Messages</p>
+            <div class="webhook-messages">
+              <label class="field">
+                <span>Running</span>
+                <input data-webhook-message="running" type="text" />
+              </label>
+              <label class="field">
+                <span>Complete</span>
+                <input data-webhook-message="complete" type="text" />
+              </label>
+              <label class="field">
+                <span>Recent</span>
+                <input data-webhook-message="recent" type="text" />
+              </label>
+              <label class="field">
+                <span>Today</span>
+                <input data-webhook-message="today" type="text" />
+              </label>
+              <label class="field">
+                <span>Done</span>
+                <input data-webhook-message="done" type="text" />
+              </label>
+              <label class="field">
+                <span>Default</span>
+                <input data-webhook-message="default" type="text" />
+              </label>
+            </div>
+          </section>
+
+          <footer class="webhook-actions">
+            <button id="saveWebhook" type="submit">Save</button>
+            <button id="testWebhook" type="button">Test</button>
+            <span id="webhookFeedback" aria-live="polite"></span>
+          </footer>
+        </form>
+      </section>
+    </div>
 
     <template id="columnTemplate">
       <section class="column">

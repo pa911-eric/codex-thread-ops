@@ -3,6 +3,7 @@ const fsSync = require("fs");
 const fs = require("fs/promises");
 const path = require("path");
 const http = require("http");
+const crypto = require("crypto");
 const { execFileSync, spawn } = require("child_process");
 
 let DatabaseSync = null;
@@ -16,7 +17,7 @@ const root = __dirname;
 const publicDir = path.join(root, "public");
 const packageJson = readJsonFileSync(path.join(root, "package.json"), {});
 const projectConfig = readJsonFileSync(path.join(root, ".agentqueue.json"), {});
-const installMetadataPath = path.join(root, ".agentqueue-install.json");
+const installMetadataPath = process.env.AGENTQUEUE_INSTALL_METADATA || path.join(root, ".agentqueue-install.json");
 const home = process.env.USERPROFILE || process.env.HOME || "";
 const codexHome = process.env.CODEX_HOME || projectConfig.codexHome || path.join(home, ".codex");
 const defaultRepo = packageJson.repository?.url || "https://github.com/pa911-eric/AgentQueue.git";
@@ -30,6 +31,7 @@ const candidateIndexPaths = [
 
 const globalStatePath = path.join(codexHome, ".codex-global-state.json");
 const tagsPath = path.join(codexHome, "agentqueue-tags.json");
+const webhooksPath = path.join(codexHome, "agentqueue-webhooks.json");
 const processManagerPath = path.join(codexHome, "process_manager", "chat_processes.json");
 const sessionsRoot = path.join(codexHome, "sessions");
 const stateDbPath = path.join(codexHome, "state_5.sqlite");
@@ -49,9 +51,13 @@ function minutesFromConfig(envName, configName, fallback, legacyName = null) {
   );
 }
 
+function parseJsonText(text) {
+  return JSON.parse(String(text).replace(/^\uFEFF/, ""));
+}
+
 function readJsonFileSync(filePath, fallback) {
   try {
-    return JSON.parse(fsSync.readFileSync(filePath, "utf8"));
+    return parseJsonText(fsSync.readFileSync(filePath, "utf8"));
   } catch {
     return fallback;
   }
@@ -205,6 +211,33 @@ const usageCache = {
   expiresAt: 0,
   payload: null,
 };
+const webhookStatuses = ["running", "complete", "recent", "today", "done"];
+const webhookDefaults = {
+  enabled: false,
+  endpoint: "",
+  signingToken: "",
+  includeSubagents: true,
+  statuses: {
+    running: true,
+    complete: true,
+    recent: false,
+    today: false,
+    done: false,
+  },
+  messages: {
+    running: "{{title}} is running",
+    complete: "{{title}} completed",
+    recent: "{{title}} moved to Recent",
+    today: "{{title}} moved to Today",
+    done: "{{title}} moved to Done",
+    default: "{{title}} changed from {{previousStatus}} to {{status}}",
+  },
+  headers: {},
+  timeoutMs: 8000,
+};
+let webhookThreadState = null;
+let webhookWatcher = null;
+let webhookProcessQueue = Promise.resolve();
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -220,12 +253,262 @@ function sendText(res, status, body, contentType = "text/plain; charset=utf-8") 
   res.end(body);
 }
 
+function sendMethodNotAllowed(res, methods) {
+  res.writeHead(405, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    allow: methods.join(", "),
+  });
+  res.end(JSON.stringify({ error: "Method not allowed", allowedMethods: methods }, null, 2));
+  return true;
+}
+
+function sendNoContent(res) {
+  res.writeHead(204, { "cache-control": "no-store" });
+  res.end();
+  return true;
+}
+
 async function readJsonFile(filePath, fallback) {
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
+    return parseJsonText(await fs.readFile(filePath, "utf8"));
   } catch {
     return fallback;
   }
+}
+
+async function writeJsonFileAtomic(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.rename(tempPath, filePath);
+}
+
+function cleanHeaderMap(value) {
+  const headers = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return headers;
+
+  for (const [key, raw] of Object.entries(value)) {
+    const name = String(key || "").trim();
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) continue;
+    if (/^(content-length|host|connection|transfer-encoding)$/i.test(name)) continue;
+    const headerValue = String(raw ?? "").trim();
+    if (headerValue) headers[name] = headerValue.slice(0, 500);
+  }
+
+  return headers;
+}
+
+function cleanWebhookMessages(value) {
+  const messages = { ...webhookDefaults.messages };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return messages;
+
+  for (const key of [...webhookStatuses, "default"]) {
+    if (typeof value[key] !== "string") continue;
+    const message = value[key].trim();
+    messages[key] = message ? message.slice(0, 500) : webhookDefaults.messages[key];
+  }
+
+  return messages;
+}
+
+function cleanWebhookStatuses(value) {
+  const statuses = { ...webhookDefaults.statuses };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return statuses;
+
+  for (const status of webhookStatuses) {
+    if (Object.prototype.hasOwnProperty.call(value, status)) statuses[status] = Boolean(value[status]);
+  }
+
+  return statuses;
+}
+
+function cleanWebhookConfig(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const endpoint = typeof source.endpoint === "string" ? source.endpoint.trim() : "";
+  let cleanEndpoint = "";
+
+  if (endpoint) {
+    const parsed = new URL(endpoint);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Webhook endpoint must use http or https");
+    cleanEndpoint = parsed.toString();
+  }
+
+  const timeoutMs = Number(source.timeoutMs);
+  return {
+    enabled: Boolean(source.enabled),
+    endpoint: cleanEndpoint,
+    signingToken: typeof source.signingToken === "string" ? source.signingToken.trim().slice(0, 200) : "",
+    includeSubagents: Object.prototype.hasOwnProperty.call(source, "includeSubagents") ? Boolean(source.includeSubagents) : webhookDefaults.includeSubagents,
+    statuses: cleanWebhookStatuses(source.statuses),
+    messages: cleanWebhookMessages(source.messages),
+    headers: cleanHeaderMap(source.headers),
+    timeoutMs: Number.isFinite(timeoutMs) ? Math.max(1000, Math.min(30000, timeoutMs)) : webhookDefaults.timeoutMs,
+  };
+}
+
+async function readWebhookConfig() {
+  const base = cleanWebhookConfig(projectConfig.webhook || {});
+  const saved = await readJsonFile(webhooksPath, null);
+  if (!saved) return { ...webhookDefaults, ...base, statuses: { ...webhookDefaults.statuses, ...base.statuses }, messages: { ...webhookDefaults.messages, ...base.messages } };
+
+  const clean = cleanWebhookConfig(saved);
+  return {
+    ...webhookDefaults,
+    ...base,
+    ...clean,
+    statuses: { ...webhookDefaults.statuses, ...base.statuses, ...clean.statuses },
+    messages: { ...webhookDefaults.messages, ...base.messages, ...clean.messages },
+    headers: { ...base.headers, ...clean.headers },
+  };
+}
+
+async function writeWebhookConfig(value) {
+  const clean = cleanWebhookConfig(value);
+  await writeJsonFileAtomic(webhooksPath, clean);
+  return clean;
+}
+
+function publicWebhookConfig(config) {
+  const headers = Object.fromEntries(Object.keys(config.headers || {}).map((key) => [key, "********"]));
+  return {
+    ...config,
+    headers,
+    configured: Boolean(config.endpoint),
+    signingToken: config.signingToken ? "********" : "",
+  };
+}
+
+function webhookStateForThread(thread) {
+  return {
+    id: thread.id,
+    status: thread.status,
+    activityAt: thread.activityAt || null,
+  };
+}
+
+function renderWebhookMessage(template, values) {
+  return String(template || webhookDefaults.messages.default).replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (match, key) => {
+    const value = values[key];
+    return value == null ? "" : String(value);
+  });
+}
+
+function buildWebhookPayload(config, event) {
+  const template = config.messages[event.status] || config.messages.default || webhookDefaults.messages.default;
+  const values = {
+    event: "thread.status_changed",
+    id: event.thread.id,
+    title: event.thread.name || "Untitled thread",
+    status: event.status,
+    statusLabel: event.thread.statusLabel || event.status,
+    previousStatus: event.previousStatus || "unknown",
+    previousStatusLabel: event.previousStatus ? event.previousStatus[0].toUpperCase() + event.previousStatus.slice(1) : "Unknown",
+    activityAt: event.thread.activityAt || "",
+    workspace: event.thread.workspace || "",
+    url: event.thread.codexUrl || "",
+  };
+
+  return {
+    event: values.event,
+    message: renderWebhookMessage(template, values),
+    changedAt: new Date().toISOString(),
+    previousStatus: event.previousStatus,
+    status: event.status,
+    thread: {
+      id: event.thread.id,
+      title: event.thread.name,
+      status: event.thread.status,
+      statusLabel: event.thread.statusLabel,
+      activityAt: event.thread.activityAt,
+      threadSource: event.thread.threadSource,
+      parentThreadId: event.thread.parentThreadId,
+      workspace: event.thread.workspace,
+      tags: event.thread.tags || [],
+      codexUrl: event.thread.codexUrl,
+    },
+  };
+}
+
+async function deliverWebhook(config, payload) {
+  const body = JSON.stringify(payload);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  const headers = {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": `AgentQueue/${packageJson.version || "0.0.0"}`,
+    "x-agentqueue-event": payload.event,
+    "x-agentqueue-thread-id": payload.thread?.id || "",
+    ...config.headers,
+  };
+
+  if (config.signingToken) {
+    headers["x-agentqueue-signature"] = `sha256=${crypto.createHmac("sha256", config.signingToken).update(body).digest("hex")}`;
+  }
+
+  try {
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    return { ok: response.ok, status: response.status, statusText: response.statusText };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function queueWebhookDelivery(config, payload) {
+  deliverWebhook(config, payload).catch((error) => {
+    console.error(`AgentQueue webhook failed for ${payload.thread?.id || "test"}: ${error.message}`);
+  });
+}
+
+async function processThreadWebhooks(snapshot) {
+  const config = await readWebhookConfig();
+  if (!config.enabled || !config.endpoint) return;
+
+  const nextState = new Map();
+  const events = [];
+  for (const thread of snapshot.threads || []) {
+    if (!config.includeSubagents && thread.threadSource === "subagent") continue;
+    const current = webhookStateForThread(thread);
+    nextState.set(thread.id, current);
+    const previous = webhookThreadState?.get(thread.id);
+    if (!previous) continue;
+    if (previous.status === current.status) continue;
+    if (!config.statuses[current.status]) continue;
+    events.push({ thread, previousStatus: previous.status, status: current.status });
+  }
+
+  webhookThreadState = nextState;
+  for (const event of events) queueWebhookDelivery(config, buildWebhookPayload(config, event));
+}
+
+async function testWebhook() {
+  const config = await readWebhookConfig();
+  if (!config.endpoint) throw new Error("Webhook endpoint is required");
+  const sampleThread = webhookThreadState?.values().next().value || { id: "00000000-0000-0000-0000-000000000000", status: "complete", activityAt: new Date().toISOString() };
+  const payload = buildWebhookPayload(config, {
+    previousStatus: "running",
+    status: sampleThread.status || "complete",
+    thread: {
+      id: sampleThread.id,
+      name: "AgentQueue webhook test",
+      status: sampleThread.status || "complete",
+      statusLabel: "Complete",
+      activityAt: sampleThread.activityAt || new Date().toISOString(),
+      threadSource: "test",
+      parentThreadId: null,
+      workspace: root,
+      tags: ["test"],
+      codexUrl: "codex://threads/00000000-0000-0000-0000-000000000000",
+    },
+  });
+  payload.event = "thread.webhook_test";
+  const result = await deliverWebhook(config, payload);
+  return { ok: result.ok, delivery: result };
 }
 
 async function readRequestJson(req, maxBytes = 64 * 1024) {
@@ -274,9 +557,7 @@ async function readThreadTags() {
 }
 
 async function writeThreadTags(tagsByThread) {
-  const tempPath = `${tagsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(tagsByThread, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, tagsPath);
+  await writeJsonFileAtomic(tagsPath, tagsByThread);
 }
 
 async function setThreadTags(threadId, tags) {
@@ -759,39 +1040,175 @@ function readLogHealth() {
   return health;
 }
 
-function removeUnreadIdsFromMap(unreadByHost, ids) {
-  if (!unreadByHost || typeof unreadByHost !== "object") return 0;
+function isThreadId(value) {
+  return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value);
+}
+
+function getPersistedAtomState(state) {
+  const atomState = state?.["electron-persisted-atom-state"];
+  if (!atomState) return {};
+  if (typeof atomState === "string") {
+    try {
+      const parsed = JSON.parse(atomState);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      return {};
+    }
+  }
+  return typeof atomState === "object" ? atomState : {};
+}
+
+function collectUnreadIdsFromStore(store, target = new Set()) {
+  if (!store) return target;
+
+  if (Array.isArray(store)) {
+    for (const id of store) {
+      if (isThreadId(id)) target.add(id);
+    }
+    return target;
+  }
+
+  if (typeof store !== "object") {
+    if (isThreadId(store)) target.add(store);
+    return target;
+  }
+
+  for (const [key, value] of Object.entries(store)) {
+    if (value === true && isThreadId(key)) target.add(key);
+    else collectUnreadIdsFromStore(value, target);
+  }
+
+  return target;
+}
+
+function collectUnreadThreadIds(state, atomState = getPersistedAtomState(state)) {
+  const unreadIds = new Set();
+  const storeNames = [
+    "unread-thread-ids-by-host-v1",
+    "unread-thread-ids",
+    "thread-unread-state-by-host-v1",
+    "thread-unread-state",
+  ];
+
+  for (const name of storeNames) {
+    collectUnreadIdsFromStore(state?.[name], unreadIds);
+    collectUnreadIdsFromStore(atomState?.[name], unreadIds);
+  }
+
+  return unreadIds;
+}
+
+function removeUnreadIdsFromStore(store, ids) {
+  if (!store) return 0;
+
+  if (Array.isArray(store)) {
+    const next = store.filter((id) => !ids.has(id));
+    const removed = store.length - next.length;
+    store.splice(0, store.length, ...next);
+    return removed;
+  }
+
+  if (typeof store !== "object") return 0;
   let removed = 0;
 
-  for (const [host, unreadIds] of Object.entries(unreadByHost)) {
-    if (!Array.isArray(unreadIds)) continue;
-    const next = unreadIds.filter((id) => !ids.has(id));
-    removed += unreadIds.length - next.length;
-    unreadByHost[host] = next;
+  for (const [key, value] of Object.entries(store)) {
+    if (value === true && ids.has(key)) {
+      delete store[key];
+      removed += 1;
+      continue;
+    }
+    removed += removeUnreadIdsFromStore(value, ids);
   }
 
   return removed;
 }
 
+async function writeGlobalState(state, atomState = null, atomStateWasString = false) {
+  if (atomStateWasString && atomState) {
+    state["electron-persisted-atom-state"] = JSON.stringify(atomState);
+  }
+  await writeJsonFileAtomic(globalStatePath, state && typeof state === "object" ? state : {});
+}
+
+function normalizeIdArray(value) {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .filter((item) => typeof item === "string" && item)
+  ));
+}
+
+function setIdInArrayStore(store, threadId, enabled) {
+  const items = normalizeIdArray(store);
+  const had = items.includes(threadId);
+  if (enabled && !had) items.push(threadId);
+  if (!enabled && had) return items.filter((id) => id !== threadId);
+  return items;
+}
+
+function writeThreadFlag(state, atomState, storeName, threadId, enabled) {
+  const currentStore = state[storeName] || atomState[storeName] || [];
+  const nextStore = setIdInArrayStore(currentStore, threadId, enabled);
+  state[storeName] = nextStore;
+  if (atomState && Object.prototype.hasOwnProperty.call(atomState, storeName)) {
+    atomState[storeName] = nextStore;
+  }
+  return nextStore.includes(threadId);
+}
+
+async function setThreadState(threadId, updates) {
+  if (!isThreadId(threadId)) throw new Error("Invalid thread id");
+  if (!updates || typeof updates !== "object" || Array.isArray(updates)) throw new Error("Request body must be an object");
+
+  const allowedKeys = new Set(["pinned", "projectless"]);
+  const next = {};
+  for (const [key, value] of Object.entries(updates)) {
+    if (!allowedKeys.has(key)) throw new Error(`Unsupported thread state field: ${key}`);
+    if (typeof value !== "boolean") throw new Error(`${key} must be a boolean`);
+    next[key] = value;
+  }
+  if (Object.keys(next).length === 0) throw new Error("No supported state fields provided");
+
+  const state = await readJsonFile(globalStatePath, {});
+  const atomStateWasString = typeof state["electron-persisted-atom-state"] === "string";
+  const atomState = getPersistedAtomState(state);
+  const result = { threadId };
+
+  if (Object.prototype.hasOwnProperty.call(next, "pinned")) {
+    result.pinned = writeThreadFlag(state, atomState, "pinned-thread-ids", threadId, next.pinned);
+  }
+  if (Object.prototype.hasOwnProperty.call(next, "projectless")) {
+    result.projectless = writeThreadFlag(state, atomState, "projectless-thread-ids", threadId, next.projectless);
+  }
+
+  await writeGlobalState(state, atomState, atomStateWasString);
+  return result;
+}
+
 async function markThreadsRead(threadIds) {
   const ids = new Set(
     (Array.isArray(threadIds) ? threadIds : [])
-      .filter((id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id))
+      .filter(isThreadId)
   );
 
   if (ids.size === 0) return { markedIds: [], removed: 0 };
 
   const state = await readJsonFile(globalStatePath, {});
-  const atomState = state["electron-persisted-atom-state"] || {};
+  const atomStateWasString = typeof state["electron-persisted-atom-state"] === "string";
+  const atomState = getPersistedAtomState(state);
   let removed = 0;
 
-  removed += removeUnreadIdsFromMap(state["unread-thread-ids-by-host-v1"], ids);
-  removed += removeUnreadIdsFromMap(atomState["unread-thread-ids-by-host-v1"], ids);
+  for (const storeName of [
+    "unread-thread-ids-by-host-v1",
+    "unread-thread-ids",
+    "thread-unread-state-by-host-v1",
+    "thread-unread-state",
+  ]) {
+    removed += removeUnreadIdsFromStore(state[storeName], ids);
+    removed += removeUnreadIdsFromStore(atomState[storeName], ids);
+  }
 
   if (removed > 0) {
-    const tempPath = `${globalStatePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await fs.rename(tempPath, globalStatePath);
+    await writeGlobalState(state, atomState, atomStateWasString);
   }
 
   return { markedIds: Array.from(ids), removed };
@@ -829,15 +1246,14 @@ function toLocalDateKey(value) {
 
 function enrichThread(thread, context) {
   const { state, sessionFilesById, processRowsByThread, spawnEdges, goals, logHealth, tagsByThread } = context;
-  const atomState = state["electron-persisted-atom-state"] || {};
+  const atomState = getPersistedAtomState(state);
   const permissionsById = state["heartbeat-thread-permissions-by-id"] || atomState["heartbeat-thread-permissions-by-id"] || {};
-  const unreadByHost = state["unread-thread-ids-by-host-v1"] || atomState["unread-thread-ids-by-host-v1"] || {};
   const pinnedIds = new Set(state["pinned-thread-ids"] || atomState["pinned-thread-ids"] || []);
   const projectlessIds = new Set(state["projectless-thread-ids"] || atomState["projectless-thread-ids"] || []);
   const workspaceHints = state["thread-workspace-root-hints"] || atomState["thread-workspace-root-hints"] || {};
   const outputDirs = state["thread-projectless-output-directories"] || atomState["thread-projectless-output-directories"] || {};
   const promptHistory = atomState["prompt-history"] || state["prompt-history"] || {};
-  const unreadIds = new Set(Object.values(unreadByHost).flat());
+  const unreadIds = collectUnreadThreadIds(state, atomState);
   const permissions = permissionsById[thread.id] || {};
   const processes = processRowsByThread.get(thread.id) || [];
   const liveProcesses = processes.filter((row) => row.alive);
@@ -984,7 +1400,7 @@ async function loadThreads() {
     });
 
   const refreshedAt = new Date().toISOString();
-  return {
+  const snapshot = {
     indexPath,
     stateDbPath: sqliteThreads.length ? stateDbPath : null,
     goalsDbPath: goals.size ? goalsDbPath : null,
@@ -998,6 +1414,135 @@ async function loadThreads() {
     summary: computeSummary(threads, refreshedAt),
     usage,
     threads,
+  };
+  webhookProcessQueue = webhookProcessQueue.then(() => processThreadWebhooks(snapshot)).catch((error) => {
+    console.error(`AgentQueue webhook processing failed: ${error.message}`);
+  });
+  return snapshot;
+}
+
+async function getThreadSnapshot(threadId) {
+  if (!isThreadId(threadId)) return null;
+  const snapshot = await loadThreads();
+  const thread = snapshot.threads.find((item) => item.id === threadId) || null;
+  return { snapshot, thread };
+}
+
+function parsePositiveInt(value, fallback, max) {
+  const number = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(number, max);
+}
+
+async function readThreadSessionPayload(threadId, query = new URLSearchParams()) {
+  const found = await getThreadSnapshot(threadId);
+  if (!found?.thread) return null;
+  const filePath = found.thread.sessionFile;
+  if (!filePath) return { threadId, filePath: null, text: "", bytes: 0, modifiedAt: null };
+
+  const maxBytes = parsePositiveInt(query.get("tailBytes"), 256 * 1024, 2 * 1024 * 1024);
+  try {
+    const tail = await readTail(filePath, maxBytes);
+    return {
+      threadId,
+      filePath,
+      bytes: tail.text.length,
+      fileSize: tail.stat.size,
+      modifiedAt: tail.stat.mtime.toISOString(),
+      truncated: tail.stat.size > maxBytes,
+      text: tail.text,
+    };
+  } catch (error) {
+    return { threadId, filePath, text: "", bytes: 0, modifiedAt: null, error: error.message };
+  }
+}
+
+async function readThreadEventsPayload(threadId, query = new URLSearchParams()) {
+  const session = await readThreadSessionPayload(threadId, query);
+  if (!session) return null;
+  const limit = parsePositiveInt(query.get("limit"), 100, 500);
+  const events = parseJsonLines(session.text)
+    .filter((event) => !String(event.id || "").startsWith("invalid-"))
+    .slice(-limit);
+  return {
+    threadId,
+    filePath: session.filePath,
+    truncated: session.truncated,
+    count: events.length,
+    events,
+  };
+}
+
+async function readTagsPayload() {
+  const tagsByThread = await readThreadTags();
+  const counts = {};
+  for (const tags of Object.values(tagsByThread)) {
+    for (const tag of tags) counts[tag] = (counts[tag] || 0) + 1;
+  }
+  return {
+    tags: Object.keys(counts).sort((a, b) => a.localeCompare(b)),
+    counts,
+    threads: tagsByThread,
+  };
+}
+
+async function readProcessesPayload() {
+  const processRowsByThread = await readProcessRows();
+  const threads = {};
+  for (const [threadId, rows] of processRowsByThread.entries()) {
+    threads[threadId] = rows;
+  }
+  return {
+    processManagerPath,
+    total: Object.values(threads).reduce((sum, rows) => sum + rows.length, 0),
+    live: Object.values(threads).flat().filter((row) => row.alive).length,
+    threads,
+  };
+}
+
+function readConfigPayload() {
+  return {
+    version: packageJson.version || "0.0.0",
+    codexHome,
+    publicDir,
+    statusWindows,
+    updateCheckEnabled: !boolFromEnv("AGENTQUEUE_UPDATE_CHECK_DISABLED") && boolFromEnv("AGENTQUEUE_UPDATE_CHECK", true),
+    projectConfig: {
+      port: projectConfig.port || null,
+      codexHome: projectConfig.codexHome || null,
+      openBrowser: Boolean(projectConfig.openBrowser),
+      recentMinutes: projectConfig.recentMinutes || null,
+      completeMinutes: projectConfig.completeMinutes || null,
+      staleMinutes: projectConfig.staleMinutes || null,
+      webhook: projectConfig.webhook ? { ...projectConfig.webhook, signingToken: projectConfig.webhook.signingToken ? "********" : "" } : null,
+    },
+  };
+}
+
+function readSourcesPayload() {
+  return {
+    codexHome,
+    candidateIndexPaths,
+    globalStatePath,
+    tagsPath,
+    webhooksPath,
+    processManagerPath,
+    sessionsRoot,
+    stateDbPath,
+    goalsDbPath,
+    logsDbPath,
+    exists: {
+      codexHome: fsSync.existsSync(codexHome),
+      sessionIndex: candidateIndexPaths.filter((filePath) => fsSync.existsSync(filePath)),
+      globalState: fsSync.existsSync(globalStatePath),
+      tags: fsSync.existsSync(tagsPath),
+      webhooks: fsSync.existsSync(webhooksPath),
+      processManager: fsSync.existsSync(processManagerPath),
+      sessionsRoot: fsSync.existsSync(sessionsRoot),
+      stateDb: fsSync.existsSync(stateDbPath),
+      goalsDb: fsSync.existsSync(goalsDbPath),
+      logsDb: fsSync.existsSync(logsDbPath),
+    },
   };
 }
 
@@ -1131,96 +1676,565 @@ async function renderHealthPage() {
   return `<!doctype html><html><head><meta charset="utf-8"><title>AgentQueue Health</title><style>body{font-family:Inter,system-ui,sans-serif;margin:24px;background:#f8fafc;color:#0f172a}main{max-width:820px}table{border-collapse:collapse;width:100%;background:#fff;border:1px solid #e2e8f0}td{padding:10px 12px;border-bottom:1px solid #e2e8f0}td:first-child{font-weight:700;color:#475569;width:180px}code{font-family:Consolas,monospace}</style></head><body><main><h1>AgentQueue Health</h1><table>${rows.map(([label, detail]) => `<tr><td>${label}</td><td><code>${escapeHtml(detail)}</code></td></tr>`).join("")}</table></main></body></html>`;
 }
 
+function jsonContent(schema) {
+  return { "application/json": { schema } };
+}
+
+function okResponse(description, schema = { type: "object" }) {
+  return { description, content: jsonContent(schema) };
+}
+
+function getOpenApiDocument() {
+  const threadIdParameter = {
+    name: "threadId",
+    in: "path",
+    required: true,
+    schema: { type: "string", format: "uuid" },
+    description: "Codex thread UUID.",
+  };
+  const errorResponse = okResponse("Error response", { $ref: "#/components/schemas/Error" });
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "AgentQueue API",
+      version: packageJson.version || "0.0.0",
+      description: "Local API for reading Codex thread state and writing conservative AgentQueue/Codex thread metadata.",
+    },
+    servers: [{ url: "/" }],
+    tags: [
+      { name: "System" },
+      { name: "Threads" },
+      { name: "Tags" },
+      { name: "Codex State" },
+      { name: "Integrations" },
+    ],
+    paths: {
+      "/api/health": {
+        get: {
+          tags: ["System"],
+          summary: "Return server health and install metadata.",
+          responses: { 200: okResponse("Health payload") },
+        },
+      },
+      "/api/config": {
+        get: {
+          tags: ["System"],
+          summary: "Return effective AgentQueue configuration.",
+          responses: { 200: okResponse("Configuration payload") },
+        },
+      },
+      "/api/sources": {
+        get: {
+          tags: ["System"],
+          summary: "Return local Codex data source paths and presence checks.",
+          responses: { 200: okResponse("Source inventory") },
+        },
+      },
+      "/api/openapi.json": {
+        get: {
+          tags: ["System"],
+          summary: "Return this OpenAPI document.",
+          responses: { 200: okResponse("OpenAPI document") },
+        },
+      },
+      "/api/update-check": {
+        get: {
+          tags: ["Integrations"],
+          summary: "Check the configured GitHub Release for updates.",
+          responses: { 200: okResponse("Update check result") },
+        },
+      },
+      "/api/webhook": {
+        get: {
+          tags: ["Integrations"],
+          summary: "Return thread status webhook configuration.",
+          responses: { 200: okResponse("Webhook configuration", { $ref: "#/components/schemas/WebhookConfig" }) },
+        },
+        put: {
+          tags: ["Integrations"],
+          summary: "Replace thread status webhook configuration.",
+          requestBody: { required: true, content: jsonContent({ $ref: "#/components/schemas/WebhookConfigInput" }) },
+          responses: { 200: okResponse("Webhook configuration", { $ref: "#/components/schemas/WebhookConfig" }), 400: errorResponse },
+        },
+      },
+      "/api/webhook/test": {
+        post: {
+          tags: ["Integrations"],
+          summary: "Send a test webhook delivery to the configured endpoint.",
+          responses: { 200: okResponse("Webhook test result"), 400: errorResponse },
+        },
+      },
+      "/api/usage": {
+        get: {
+          tags: ["Threads"],
+          summary: "Return local Codex token usage windows parsed from session logs.",
+          responses: { 200: okResponse("Usage payload") },
+        },
+      },
+      "/api/processes": {
+        get: {
+          tags: ["Threads"],
+          summary: "Return live/local terminal process metadata grouped by thread.",
+          responses: { 200: okResponse("Process payload") },
+        },
+      },
+      "/api/tags": {
+        get: {
+          tags: ["Tags"],
+          summary: "Return all AgentQueue tags and thread mappings.",
+          responses: { 200: okResponse("Tag inventory") },
+        },
+      },
+      "/api/threads": {
+        get: {
+          tags: ["Threads"],
+          summary: "Return the full dashboard thread snapshot.",
+          responses: { 200: okResponse("Thread snapshot", { $ref: "#/components/schemas/ThreadSnapshot" }) },
+        },
+      },
+      "/api/threads/{threadId}": {
+        get: {
+          tags: ["Threads"],
+          summary: "Return one enriched thread from the current snapshot.",
+          parameters: [threadIdParameter],
+          responses: { 200: okResponse("Thread payload"), 404: errorResponse },
+        },
+      },
+      "/api/threads/{threadId}/session": {
+        get: {
+          tags: ["Threads"],
+          summary: "Return the tail text of a thread session JSONL file.",
+          parameters: [
+            threadIdParameter,
+            { name: "tailBytes", in: "query", schema: { type: "integer", minimum: 1, maximum: 2097152 } },
+          ],
+          responses: { 200: okResponse("Session tail"), 404: errorResponse },
+        },
+      },
+      "/api/threads/{threadId}/events": {
+        get: {
+          tags: ["Threads"],
+          summary: "Return parsed JSONL events from the tail of a thread session file.",
+          parameters: [
+            threadIdParameter,
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500 } },
+            { name: "tailBytes", in: "query", schema: { type: "integer", minimum: 1, maximum: 2097152 } },
+          ],
+          responses: { 200: okResponse("Thread events"), 404: errorResponse },
+        },
+      },
+      "/api/threads/{threadId}/tags": {
+        patch: {
+          tags: ["Tags"],
+          summary: "Replace AgentQueue tags for a thread.",
+          parameters: [threadIdParameter],
+          requestBody: { required: true, content: jsonContent({ $ref: "#/components/schemas/TagsInput" }) },
+          responses: { 200: okResponse("Updated tags"), 400: errorResponse },
+        },
+      },
+      "/api/threads/{threadId}/read": {
+        post: {
+          tags: ["Codex State"],
+          summary: "Remove a thread id from known Codex unread-state stores.",
+          parameters: [threadIdParameter],
+          responses: { 200: okResponse("Read-state update"), 400: errorResponse },
+        },
+      },
+      "/api/threads/{threadId}/state": {
+        patch: {
+          tags: ["Codex State"],
+          summary: "Update supported Codex global-state flags for a thread.",
+          parameters: [threadIdParameter],
+          requestBody: { required: true, content: jsonContent({ $ref: "#/components/schemas/ThreadStateInput" }) },
+          responses: { 200: okResponse("Updated thread state"), 400: errorResponse },
+        },
+      },
+      "/api/threads/{threadId}/open": {
+        post: {
+          tags: ["Integrations"],
+          summary: "Open a thread in Codex using its codex:// deep link.",
+          parameters: [threadIdParameter],
+          requestBody: { content: jsonContent({ type: "object", properties: { dryRun: { type: "boolean" } } }) },
+          responses: { 200: okResponse("Open result"), 400: errorResponse },
+        },
+      },
+      "/api/events": {
+        get: {
+          tags: ["Integrations"],
+          summary: "Stream thread snapshots as Server-Sent Events.",
+          responses: {
+            200: {
+              description: "SSE stream",
+              content: { "text/event-stream": { schema: { type: "string" } } },
+            },
+          },
+        },
+      },
+      "/api/threads/read": {
+        post: {
+          tags: ["Codex State"],
+          deprecated: true,
+          summary: "Legacy bulk mark-read endpoint.",
+          requestBody: { required: true, content: jsonContent({ type: "object", properties: { threadIds: { type: "array", items: { type: "string", format: "uuid" } } } }) },
+          responses: { 200: okResponse("Read-state update"), 400: errorResponse },
+        },
+      },
+      "/api/threads/tags": {
+        post: {
+          tags: ["Tags"],
+          deprecated: true,
+          summary: "Legacy thread tag replacement endpoint.",
+          requestBody: { required: true, content: jsonContent({ type: "object", properties: { threadId: { type: "string", format: "uuid" }, tags: { type: "array", items: { type: "string" } } } }) },
+          responses: { 200: okResponse("Updated tags"), 400: errorResponse },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        Error: {
+          type: "object",
+          properties: { error: { type: "string" } },
+          required: ["error"],
+        },
+        ThreadSnapshot: {
+          type: "object",
+          properties: {
+            refreshedAt: { type: "string", format: "date-time" },
+            summary: { type: "object" },
+            threads: { type: "array", items: { type: "object" } },
+          },
+        },
+        TagsInput: {
+          type: "object",
+          properties: { tags: { type: "array", items: { type: "string" }, maxItems: 12 } },
+          required: ["tags"],
+        },
+        ThreadStateInput: {
+          type: "object",
+          properties: {
+            pinned: { type: "boolean" },
+            projectless: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        WebhookConfig: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            endpoint: { type: "string" },
+            configured: { type: "boolean" },
+            includeSubagents: { type: "boolean" },
+            statuses: { type: "object", additionalProperties: { type: "boolean" } },
+            messages: { type: "object", additionalProperties: { type: "string" } },
+            signingToken: { type: "string", description: "Masked when configured." },
+          },
+        },
+        WebhookConfigInput: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            endpoint: { type: "string", format: "uri" },
+            includeSubagents: { type: "boolean" },
+            statuses: { type: "object", additionalProperties: { type: "boolean" } },
+            messages: { type: "object", additionalProperties: { type: "string", maxLength: 500 } },
+            signingToken: { type: "string" },
+            headers: { type: "object", additionalProperties: { type: "string" } },
+            timeoutMs: { type: "integer", minimum: 1000, maximum: 30000 },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+}
+
+function renderSwaggerPage() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentQueue API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    body { margin: 0; background: #f8fafc; color: #0f172a; font-family: Inter, system-ui, sans-serif; }
+    .topbar { display: none; }
+    #swagger-ui { max-width: 1280px; margin: 0 auto; }
+    .swagger-ui .scheme-container, .swagger-ui .opblock, .swagger-ui .info { border-radius: 4px; box-shadow: none; }
+    .swagger-ui .info { margin: 18px 0; }
+    .swagger-ui code, .swagger-ui textarea { font-family: "JetBrains Mono", Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: "/api/openapi.json",
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      displayRequestDuration: true,
+      persistAuthorization: false,
+    });
+  </script>
+</body>
+</html>`;
+}
+
 async function sendEvent(res) {
   const payload = await loadThreads();
   res.write(`event: snapshot\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function matchThreadRoute(pathname) {
+  const match = pathname.match(/^\/api\/threads\/([0-9a-f-]{36})(?:\/([^/]+))?$/i);
+  if (!match) return null;
+  return { threadId: match[1], action: match[2] || "" };
+}
+
+async function handleApiRequest(req, res, url) {
+  if (url.pathname === "/api/docs") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendText(res, 200, renderSwaggerPage(), "text/html; charset=utf-8");
+    return true;
+  }
+
+  if (url.pathname === "/api/openapi.json") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, getOpenApiDocument());
+    return true;
+  }
+
+  if (url.pathname === "/api/webhook") {
+    if (req.method === "GET") {
+      sendJson(res, 200, publicWebhookConfig(await readWebhookConfig()));
+      return true;
+    }
+
+    if (req.method === "PUT") {
+      const current = await readWebhookConfig();
+      const rawBody = await readRequestJson(req);
+      const body = rawBody && typeof rawBody === "object" && !Array.isArray(rawBody) ? rawBody : {};
+      const next = {
+        ...current,
+        ...body,
+        signingToken: body.signingToken ? body.signingToken : current.signingToken,
+        statuses: { ...current.statuses, ...(body.statuses || {}) },
+        messages: { ...current.messages, ...(body.messages || {}) },
+        headers: Object.prototype.hasOwnProperty.call(body, "headers") ? { ...(body.headers || {}) } : current.headers,
+      };
+      sendJson(res, 200, publicWebhookConfig(await writeWebhookConfig(next)));
+      return true;
+    }
+
+    return sendMethodNotAllowed(res, ["GET", "PUT"]);
+  }
+
+  if (url.pathname === "/api/webhook/test") {
+    if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+    sendJson(res, 200, await testWebhook());
+    return true;
+  }
+
+  if (url.pathname === "/api/threads") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, await loadThreads());
+    return true;
+  }
+
+  if (url.pathname === "/api/threads/read") {
+    if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+    const body = await readRequestJson(req);
+    sendJson(res, 200, { ok: true, ...(await markThreadsRead(body.threadIds)) });
+    return true;
+  }
+
+  if (url.pathname === "/api/threads/tags") {
+    if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+    const body = await readRequestJson(req);
+    sendJson(res, 200, { ok: true, ...(await setThreadTags(body.threadId, body.tags)) });
+    return true;
+  }
+
+  const threadRoute = matchThreadRoute(url.pathname);
+  if (threadRoute) {
+    const { threadId, action } = threadRoute;
+
+    if (!action) {
+      if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+      const found = await getThreadSnapshot(threadId);
+      if (!found?.thread) return sendJson(res, 404, { error: "Thread not found" });
+      sendJson(res, 200, { thread: found.thread, refreshedAt: found.snapshot.refreshedAt });
+      return true;
+    }
+
+    if (action === "session") {
+      if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+      const payload = await readThreadSessionPayload(threadId, url.searchParams);
+      if (!payload) return sendJson(res, 404, { error: "Thread not found" });
+      sendJson(res, 200, payload);
+      return true;
+    }
+
+    if (action === "events") {
+      if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+      const payload = await readThreadEventsPayload(threadId, url.searchParams);
+      if (!payload) return sendJson(res, 404, { error: "Thread not found" });
+      sendJson(res, 200, payload);
+      return true;
+    }
+
+    if (action === "tags") {
+      if (req.method !== "PATCH") return sendMethodNotAllowed(res, ["PATCH"]);
+      const body = await readRequestJson(req);
+      sendJson(res, 200, { ok: true, ...(await setThreadTags(threadId, body.tags)) });
+      return true;
+    }
+
+    if (action === "read") {
+      if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+      sendJson(res, 200, { ok: true, ...(await markThreadsRead([threadId])) });
+      return true;
+    }
+
+    if (action === "state") {
+      if (req.method !== "PATCH") return sendMethodNotAllowed(res, ["PATCH"]);
+      const body = await readRequestJson(req);
+      sendJson(res, 200, { ok: true, ...(await setThreadState(threadId, body)) });
+      return true;
+    }
+
+    if (action === "open") {
+      if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+      const body = await readRequestJson(req);
+      const codexUrl = `codex://threads/${threadId}`;
+      if (!body.dryRun) openBrowser(codexUrl);
+      sendJson(res, 200, { ok: true, threadId, codexUrl, opened: !body.dryRun });
+      return true;
+    }
+  }
+
+  if (url.pathname === "/api/tags") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, await readTagsPayload());
+    return true;
+  }
+
+  if (url.pathname === "/api/processes") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, await readProcessesPayload());
+    return true;
+  }
+
+  if (url.pathname === "/api/config") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, readConfigPayload());
+    return true;
+  }
+
+  if (url.pathname === "/api/sources") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, readSourcesPayload());
+    return true;
+  }
+
+  if (url.pathname === "/api/health") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, {
+      ok: true,
+      version: packageJson.version || "0.0.0",
+      codexHome,
+      node: process.version,
+      sqlite: Boolean(DatabaseSync),
+      git: getGitInfo(),
+      now: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/update-check") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    const git = getGitInfo();
+    const release = await fetchLatestRelease(git.repo || expectedRepoSlug());
+    await updateInstallMetadata({ lastUpdateCheck: new Date().toISOString(), repo: release.repo || git.repo || expectedRepoSlug() });
+    sendJson(res, 200, { ...release, gitInstall: Boolean(git.isRepo), dirty: Boolean(git.dirty) });
+    return true;
+  }
+
+  if (url.pathname === "/api/usage") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    sendJson(res, 200, await readUsageMetrics());
+    return true;
+  }
+
+  if (url.pathname === "/api/events") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    });
+    await sendEvent(res);
+    const timer = setInterval(() => {
+      sendEvent(res).catch((error) => {
+        res.write(`event: error\n`);
+        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      });
+    }, 3000);
+    req.on("close", () => clearInterval(timer));
+    return true;
+  }
+
+  if (url.pathname.startsWith("/api/")) {
+    sendJson(res, 404, { error: "API endpoint not found" });
+    return true;
+  }
+
+  return false;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
 
   try {
-    if (url.pathname === "/api/threads") {
-      sendJson(res, 200, await loadThreads());
-      return;
-    }
-
-    if (url.pathname === "/api/threads/read") {
-      if (req.method !== "POST") {
-        sendJson(res, 405, { error: "Method not allowed" });
-        return;
-      }
-
-      const body = await readRequestJson(req);
-      sendJson(res, 200, { ok: true, ...(await markThreadsRead(body.threadIds)) });
-      return;
-    }
-
-    if (url.pathname === "/api/threads/tags") {
-      if (req.method !== "POST") {
-        sendJson(res, 405, { error: "Method not allowed" });
-        return;
-      }
-
-      const body = await readRequestJson(req);
-      sendJson(res, 200, { ok: true, ...(await setThreadTags(body.threadId, body.tags)) });
-      return;
-    }
-
-    if (url.pathname === "/api/health") {
-      sendJson(res, 200, {
-        ok: true,
-        version: packageJson.version || "0.0.0",
-        codexHome,
-        node: process.version,
-        sqlite: Boolean(DatabaseSync),
-        git: getGitInfo(),
-        now: new Date().toISOString(),
-      });
-      return;
-    }
-
-    if (url.pathname === "/api/update-check") {
-      const git = getGitInfo();
-      const release = await fetchLatestRelease(git.repo || expectedRepoSlug());
-      await updateInstallMetadata({ lastUpdateCheck: new Date().toISOString(), repo: release.repo || git.repo || expectedRepoSlug() });
-      sendJson(res, 200, { ...release, gitInstall: Boolean(git.isRepo), dirty: Boolean(git.dirty) });
-      return;
-    }
-
-    if (url.pathname === "/api/usage") {
-      sendJson(res, 200, await readUsageMetrics());
-      return;
-    }
-
     if (url.pathname === "/health") {
+      if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
       sendText(res, 200, await renderHealthPage(), "text/html; charset=utf-8");
       return;
     }
 
-    if (url.pathname === "/api/events") {
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-      });
-      await sendEvent(res);
-      const timer = setInterval(() => {
-        sendEvent(res).catch((error) => {
-          res.write(`event: error\n`);
-          res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-        });
-      }, 3000);
-      req.on("close", () => clearInterval(timer));
-      return;
-    }
+    if (await handleApiRequest(req, res, url)) return;
 
     await serveStatic(res, url.pathname);
   } catch (error) {
-    sendJson(res, 500, { error: error.message });
+    if (res.headersSent) {
+      console.error(error.stack || error.message);
+      res.end();
+      return;
+    }
+    const status = /invalid|unsupported|required|must be|too large|JSON/i.test(error.message) ? 400 : 500;
+    sendJson(res, status, { error: error.message });
   }
 });
+
+async function runWebhookWatcherTick() {
+  const config = await readWebhookConfig();
+  if (!config.enabled || !config.endpoint) return;
+  await loadThreads();
+}
+
+function startWebhookWatcher() {
+  if (webhookWatcher) return;
+  runWebhookWatcherTick().catch((error) => {
+    console.error(`AgentQueue webhook watcher failed: ${error.message}`);
+  });
+  webhookWatcher = setInterval(() => {
+    runWebhookWatcherTick().catch((error) => {
+      console.error(`AgentQueue webhook watcher failed: ${error.message}`);
+    });
+  }, 3000);
+}
 
 function listen(port, attemptsLeft = 12) {
   server.once("error", (error) => {
@@ -1235,6 +2249,7 @@ function listen(port, attemptsLeft = 12) {
     const address = server.address();
     const url = `http://localhost:${address.port}`;
     console.log(`AgentQueue running at ${url}`);
+    startWebhookWatcher();
     const shouldOpen = cliArgs.includes("--open") || boolFromEnv("AGENTQUEUE_OPEN", Boolean(projectConfig.openBrowser));
     if (shouldOpen) openBrowser(url);
   });

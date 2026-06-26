@@ -4,5 +4,25 @@
   "recentMinutes": 120,
   "completeMinutes": 10,
   "staleMinutes": 15,
-  "openBrowser": true
+  "openBrowser": true,
+  "webhook": {
+    "enabled": false,
+    "endpoint": "https://example.com/agentqueue",
+    "includeSubagents": true,
+    "statuses": {
+      "running": true,
+      "complete": true,
+      "recent": false,
+      "today": false,
+      "done": false
+    },
+    "messages": {
+      "running": "{{title}} is running",
+      "complete": "{{title}} completed",
+      "recent": "{{title}} moved to Recent",
+      "today": "{{title}} moved to Today",
+      "done": "{{title}} moved to Done",
+      "default": "{{title}} changed from {{previousStatus}} to {{status}}"
+    }
+  }
 }

@@ -20,8 +20,11 @@ const state = {
   focusMode: false,
   panelCollapsed: false,
   panelWidth: 348,
+  timelinePanelCollapsed: true,
+  timelinePanelWidth: 360,
   usage: null,
   update: null,
+  webhook: null,
   selectedThreadId: null,
   lastSnapshotAt: null,
 };
@@ -33,6 +36,12 @@ const panelWidthDefaults = {
   min: 280,
   max: 620,
   default: 348,
+  mobileBreakpoint: 720,
+};
+const timelinePanelWidthDefaults = {
+  min: 280,
+  max: 620,
+  default: 360,
   mobileBreakpoint: 720,
 };
 const board = document.querySelector("#board");
@@ -54,6 +63,9 @@ const columnSwitcher = document.querySelector("#columnSwitcher");
 const panelToggle = document.querySelector("#panelToggle");
 const controlPanel = document.querySelector("#controlPanel");
 const panelResizeHandle = document.querySelector("#panelResizeHandle");
+const timelinePanel = document.querySelector("#timelinePanel");
+const timelinePanelToggle = document.querySelector("#timelinePanelToggle");
+const timelinePanelResizeHandle = document.querySelector("#timelinePanelResizeHandle");
 const detailDrawer = document.querySelector("#detailDrawer");
 const closeDetail = document.querySelector("#closeDetail");
 const detailKicker = document.querySelector("#detailKicker");
@@ -69,6 +81,18 @@ const updateDetail = document.querySelector("#updateDetail");
 const updateReleaseLink = document.querySelector("#updateReleaseLink");
 const copyUpdateCommand = document.querySelector("#copyUpdateCommand");
 const dismissUpdate = document.querySelector("#dismissUpdate");
+const openWebhookSettings = document.querySelector("#openWebhookSettings");
+const closeWebhookSettings = document.querySelector("#closeWebhookSettings");
+const webhookModal = document.querySelector("#webhookModal");
+const webhookForm = document.querySelector("#webhookForm");
+const webhookState = document.querySelector("#webhookState");
+const webhookModalState = document.querySelector("#webhookModalState");
+const webhookEnabled = document.querySelector("#webhookEnabled");
+const webhookEndpoint = document.querySelector("#webhookEndpoint");
+const webhookIncludeSubagents = document.querySelector("#webhookIncludeSubagents");
+const webhookSigningToken = document.querySelector("#webhookSigningToken");
+const webhookFeedback = document.querySelector("#webhookFeedback");
+const testWebhook = document.querySelector("#testWebhook");
 let menuThreadId = null;
 
 const quickFilterDefs = [
@@ -86,6 +110,7 @@ const viewModeDefs = [
   { id: "board", label: "Board", tip: "Show threads grouped by status columns" },
   { id: "list", label: "List", tip: "Show a condensed monitor list" },
 ];
+const webhookStatusIds = ["running", "complete", "recent", "today", "done"];
 
 const sortModeDefs = {
   priority: {
@@ -128,6 +153,8 @@ function savePreferences() {
     focusMode: state.focusMode,
     panelCollapsed: state.panelCollapsed,
     panelWidth: state.panelWidth,
+    timelinePanelCollapsed: state.timelinePanelCollapsed,
+    timelinePanelWidth: state.timelinePanelWidth,
   }));
 }
 
@@ -147,8 +174,10 @@ function restorePreferences() {
   if (columns.some((column) => column.id === prefs.mobileColumn)) state.mobileColumn = prefs.mobileColumn;
   if (Object.hasOwn(prefs, "hideDone")) state.hideDone = Boolean(prefs.hideDone);
   if (Number.isFinite(Number(prefs.panelWidth))) state.panelWidth = Number(prefs.panelWidth);
+  if (Number.isFinite(Number(prefs.timelinePanelWidth))) state.timelinePanelWidth = Number(prefs.timelinePanelWidth);
   state.focusMode = Boolean(prefs.focusMode);
   state.panelCollapsed = Boolean(prefs.panelCollapsed);
+  if (Object.hasOwn(prefs, "timelinePanelCollapsed")) state.timelinePanelCollapsed = Boolean(prefs.timelinePanelCollapsed);
 
   search.value = state.query;
   sortMode.value = state.sortMode;
@@ -156,6 +185,8 @@ function restorePreferences() {
   focusMode.setAttribute("aria-pressed", String(state.focusMode));
   applyPanelWidth(state.panelWidth, false);
   setPanelCollapsed(state.panelCollapsed, false);
+  applyTimelinePanelWidth(state.timelinePanelWidth, false);
+  setTimelinePanelCollapsed(state.timelinePanelCollapsed, false);
 }
 
 function normalize(value) {
@@ -810,6 +841,103 @@ function renderUpdateNotice() {
   updateNotice.hidden = false;
 }
 
+function setWebhookFeedback(value) {
+  webhookFeedback.textContent = value || "";
+}
+
+function renderWebhookSettings() {
+  const config = state.webhook || {};
+  webhookEnabled.checked = Boolean(config.enabled);
+  webhookEndpoint.value = config.endpoint || "";
+  webhookIncludeSubagents.checked = config.includeSubagents !== false;
+  webhookSigningToken.value = "";
+  webhookSigningToken.placeholder = config.signingToken ? "Configured" : "";
+
+  for (const status of webhookStatusIds) {
+    const input = webhookForm.querySelector(`[data-webhook-status="${status}"]`);
+    if (input) input.checked = Boolean(config.statuses?.[status]);
+  }
+
+  webhookForm.querySelectorAll("[data-webhook-message]").forEach((input) => {
+    input.value = config.messages?.[input.dataset.webhookMessage] || "";
+  });
+
+  let label = "Disabled";
+  if (config.enabled && config.endpoint) label = "Active";
+  else if (config.enabled) label = "Incomplete";
+  else if (config.endpoint) label = "Configured";
+  webhookState.textContent = label;
+  webhookModalState.textContent = label;
+}
+
+function openWebhookModal() {
+  webhookModal.hidden = false;
+  document.body.classList.add("modal-open");
+  renderWebhookSettings();
+  webhookEndpoint.focus();
+}
+
+function closeWebhookModal() {
+  webhookModal.hidden = true;
+  document.body.classList.remove("modal-open");
+  openWebhookSettings.focus();
+}
+
+function collectWebhookSettings() {
+  const statuses = {};
+  for (const status of webhookStatusIds) {
+    statuses[status] = Boolean(webhookForm.querySelector(`[data-webhook-status="${status}"]`)?.checked);
+  }
+
+  const messages = {};
+  webhookForm.querySelectorAll("[data-webhook-message]").forEach((input) => {
+    messages[input.dataset.webhookMessage] = input.value.trim();
+  });
+
+  return {
+    enabled: webhookEnabled.checked,
+    endpoint: webhookEndpoint.value.trim(),
+    includeSubagents: webhookIncludeSubagents.checked,
+    signingToken: webhookSigningToken.value.trim(),
+    statuses,
+    messages,
+  };
+}
+
+async function loadWebhookSettings() {
+  try {
+    const response = await fetch("/api/webhook", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Webhook config failed: ${response.status}`);
+    state.webhook = await response.json();
+    renderWebhookSettings();
+  } catch (error) {
+    setWebhookFeedback(error.message);
+  }
+}
+
+async function saveWebhookSettings() {
+  setWebhookFeedback("Saving");
+  const response = await fetch("/api/webhook", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(collectWebhookSettings()),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Webhook save failed: ${response.status}`);
+  state.webhook = data;
+  renderWebhookSettings();
+  setWebhookFeedback("Saved");
+}
+
+async function sendWebhookTest() {
+  setWebhookFeedback("Testing");
+  const response = await fetch("/api/webhook/test", { method: "POST" });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Webhook test failed: ${response.status}`);
+  if (!data.ok) throw new Error(`HTTP ${data.delivery?.status || "--"}`);
+  setWebhookFeedback("Sent");
+}
+
 function groupThreadsByRepeatedProject(threads) {
   const counts = new Map();
   for (const thread of threads) {
@@ -1265,11 +1393,18 @@ async function markRead(thread, includeChildren = false) {
   });
 
   if (!response.ok) throw new Error(`Mark read failed: ${response.status}`);
+  const result = await response.json();
 
   const ids = new Set(threadIds);
   state.threads = state.threads.map((item) => ids.has(item.id) ? { ...item, unread: false } : item);
   render();
   await loadThreads({ force: true });
+  const remaining = state.threads.filter((item) => ids.has(item.id) && item.unread);
+  if (remaining.length) {
+    throw new Error(result.removed
+      ? "Codex marked the thread unread again after refresh"
+      : "No matching unread state was removed");
+  }
 }
 
 async function updateThreadTags(threadId, tags) {
@@ -1506,6 +1641,108 @@ function setPanelCollapsed(collapsed, persist = true) {
   if (persist) savePreferences();
 }
 
+function getTimelinePanelMaxWidth() {
+  const viewportMax = Math.floor(window.innerWidth * 0.44);
+  return Math.max(timelinePanelWidthDefaults.min, Math.min(timelinePanelWidthDefaults.max, viewportMax));
+}
+
+function clampTimelinePanelWidth(value) {
+  const width = Number(value);
+  const fallback = Number.isFinite(width) ? width : timelinePanelWidthDefaults.default;
+  return Math.round(Math.max(timelinePanelWidthDefaults.min, Math.min(getTimelinePanelMaxWidth(), fallback)));
+}
+
+function updateTimelinePanelResizeHandle(width) {
+  const max = getTimelinePanelMaxWidth();
+  timelinePanelResizeHandle.setAttribute("aria-valuemin", String(timelinePanelWidthDefaults.min));
+  timelinePanelResizeHandle.setAttribute("aria-valuemax", String(max));
+  timelinePanelResizeHandle.setAttribute("aria-valuenow", String(width));
+  timelinePanelResizeHandle.setAttribute("aria-valuetext", `${width}px`);
+}
+
+function applyTimelinePanelWidth(width, persist = true) {
+  const nextWidth = clampTimelinePanelWidth(width);
+  state.timelinePanelWidth = nextWidth;
+  document.documentElement.style.setProperty("--timeline-panel-width", `${nextWidth}px`);
+  updateTimelinePanelResizeHandle(nextWidth);
+  if (persist) savePreferences();
+}
+
+function initTimelinePanelResize() {
+  let pointerId = null;
+  let startX = 0;
+  let startWidth = timelinePanelWidthDefaults.default;
+
+  timelinePanelResizeHandle.addEventListener("pointerdown", (event) => {
+    if (state.timelinePanelCollapsed || window.innerWidth <= timelinePanelWidthDefaults.mobileBreakpoint) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startWidth = state.timelinePanelWidth;
+    timelinePanelResizeHandle.setPointerCapture(pointerId);
+    document.body.classList.add("is-resizing");
+    event.preventDefault();
+  });
+
+  timelinePanelResizeHandle.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== pointerId) return;
+    applyTimelinePanelWidth(startWidth + startX - event.clientX, false);
+  });
+
+  function finishResize(event) {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    document.body.classList.remove("is-resizing");
+    savePreferences();
+  }
+
+  timelinePanelResizeHandle.addEventListener("pointerup", finishResize);
+  timelinePanelResizeHandle.addEventListener("pointercancel", finishResize);
+
+  timelinePanelResizeHandle.addEventListener("dblclick", () => {
+    applyTimelinePanelWidth(timelinePanelWidthDefaults.default);
+  });
+
+  timelinePanelResizeHandle.addEventListener("keydown", (event) => {
+    const steps = {
+      ArrowLeft: 16,
+      ArrowRight: -16,
+      PageUp: 48,
+      PageDown: -48,
+    };
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      applyTimelinePanelWidth(timelinePanelWidthDefaults.min);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      applyTimelinePanelWidth(getTimelinePanelMaxWidth());
+      return;
+    }
+
+    if (!Object.hasOwn(steps, event.key)) return;
+    event.preventDefault();
+    applyTimelinePanelWidth(state.timelinePanelWidth + steps[event.key]);
+  });
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > timelinePanelWidthDefaults.mobileBreakpoint) applyTimelinePanelWidth(state.timelinePanelWidth, false);
+    else updateTimelinePanelResizeHandle(state.timelinePanelWidth);
+  });
+}
+
+function setTimelinePanelCollapsed(collapsed, persist = true) {
+  state.timelinePanelCollapsed = collapsed;
+  document.body.classList.toggle("timeline-panel-collapsed", collapsed);
+  timelinePanel.setAttribute("aria-label", collapsed ? "Thread interaction timeline collapsed" : "Thread interaction timeline");
+  timelinePanelToggle.setAttribute("aria-expanded", String(!collapsed));
+  timelinePanelToggle.setAttribute("aria-label", collapsed ? "Expand timeline" : "Collapse timeline");
+  timelinePanelToggle.title = collapsed ? "Expand timeline" : "Collapse timeline";
+  if (persist) savePreferences();
+}
+
 function render() {
   renderStatusFilters();
   renderQuickFilters();
@@ -1534,9 +1771,12 @@ async function loadThreads({ force = false } = {}) {
   try {
     const url = force ? `/api/threads?refresh=${Date.now()}` : "/api/threads";
     const response = await fetch(url, { cache: "no-store" });
-    applySnapshot(await response.json());
+    const data = await response.json();
+    await applySnapshot(data);
+    return data;
   } catch (error) {
     document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
+    return null;
   } finally {
     refresh.disabled = false;
   }
@@ -1584,7 +1824,24 @@ dismissUpdate.addEventListener("click", () => {
   if (state.update?.latestTag) localStorage.setItem(dismissedUpdateKey, state.update.latestTag);
   renderUpdateNotice();
 });
+openWebhookSettings.addEventListener("click", openWebhookModal);
+closeWebhookSettings.addEventListener("click", closeWebhookModal);
+webhookModal.addEventListener("click", (event) => {
+  if (event.target === webhookModal) closeWebhookModal();
+});
+webhookForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveWebhookSettings().catch((error) => {
+    setWebhookFeedback(error.message);
+  });
+});
+testWebhook.addEventListener("click", () => {
+  sendWebhookTest().catch((error) => {
+    setWebhookFeedback(error.message);
+  });
+});
 panelToggle.addEventListener("click", () => setPanelCollapsed(!state.panelCollapsed));
+timelinePanelToggle.addEventListener("click", () => setTimelinePanelCollapsed(!state.timelinePanelCollapsed));
 closeDetail.addEventListener("click", closeDetails);
 cardMenu.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
@@ -1601,6 +1858,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!cardMenu.hidden) closeCardMenu();
   if (!detailDrawer.hidden) closeDetails();
+  if (!webhookModal.hidden) closeWebhookModal();
 });
 
 focusMode.addEventListener("click", () => {
@@ -1627,6 +1885,7 @@ setInterval(() => {
 }, 1000);
 
 initPanelResize();
+initTimelinePanelResize();
 restorePreferences();
 renderStatusFilters();
 renderQuickFilters();
@@ -1634,3 +1893,4 @@ renderViewModes();
 renderSortTiers();
 connectEvents();
 checkForUpdates();
+loadWebhookSettings();

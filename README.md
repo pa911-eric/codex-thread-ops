@@ -18,9 +18,11 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 - Usage limit panel with primary/secondary reset windows, burn rate, and burndown charts when local `token_count` events are available.
 - Local custom tags with tag chips, tag search, and tag filtering.
 - Right-click card menu for details, opening threads, copying IDs/links/titles, and marking local unread state as read.
+- Thread status webhooks with per-status message templates, optional signing, and a test action.
 - Quick filters for review, risk, unread, projectless, and subagent work.
 - <img width="584" height="349" alt="image" src="https://github.com/user-attachments/assets/371353a4-0c4b-4d80-8706-19303f4304a2" />
 - Tiered sort modes for priority, activity, longest running, and risk first.
+- Local OpenAPI JSON and Swagger UI for API reads, thread/session inspection, tag writes, unread writes, and supported Codex state flags.
 - Local-only data access. No telemetry, account service, or npm install required.
 
 ## Requirements
@@ -127,6 +129,26 @@ npm run doctor
 
 The doctor checks Node.js, SQLite support, `CODEX_HOME`, Codex inventory files, session files, Git install state, and the latest GitHub release when the network is available.
 
+Run the endpoint test suite with:
+
+```powershell
+npm test
+```
+
+## Local API
+
+AgentQueue exposes a local JSON API alongside the dashboard:
+
+- Swagger UI: `http://localhost:4173/api/docs`
+- OpenAPI JSON: `http://localhost:4173/api/openapi.json`
+- Main snapshot: `GET /api/threads`
+- Thread detail: `GET /api/threads/{threadId}`
+- Session tail and parsed events: `GET /api/threads/{threadId}/session`, `GET /api/threads/{threadId}/events`
+- Writes: `PATCH /api/threads/{threadId}/tags`, `POST /api/threads/{threadId}/read`, `PATCH /api/threads/{threadId}/state`
+- Integrations: `GET /api/events`, `POST /api/threads/{threadId}/open`, `GET /api/processes`, `GET /api/usage`, `GET/PUT /api/webhook`, `POST /api/webhook/test`
+
+Writes are intentionally conservative. Tags are stored in AgentQueue's sidecar file, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported global-state flags such as `pinned` and `projectless`.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -141,6 +163,20 @@ The doctor checks Node.js, SQLite support, `CODEX_HOME`, Codex inventory files, 
 | `AGENTQUEUE_UPDATE_CHECK_DISABLED` | unset | Set to `1` to disable GitHub release checks. |
 
 Legacy `CODEX_THREAD_OPS_*` names still work as fallbacks.
+
+### Thread webhooks
+
+Use the Webhook Configure dialog in the dashboard to register an HTTP or HTTPS endpoint. AgentQueue sends a `POST` when a thread changes status lane after the server has established its initial baseline. The runtime settings are stored in:
+
+```text
+%CODEX_HOME%\agentqueue-webhooks.json
+```
+
+You can seed defaults from `.agentqueue.json` with a `webhook` object. Dashboard changes write to the sidecar file so local endpoints and signing tokens are not committed.
+
+Supported message templates are keyed by status: `running`, `complete`, `recent`, `today`, `done`, plus `default`. Templates can use `{{title}}`, `{{id}}`, `{{status}}`, `{{statusLabel}}`, `{{previousStatus}}`, `{{activityAt}}`, `{{workspace}}`, and `{{url}}`.
+
+Webhook requests include JSON with `event`, `message`, `previousStatus`, `status`, `changedAt`, and a compact `thread` object. If a signing token is configured, AgentQueue adds `x-agentqueue-signature: sha256=<hmac>` over the JSON body.
 
 ## Updates
 
@@ -181,12 +217,15 @@ The dashboard reads local files only:
 - `%CODEX_HOME%\session_index.jsonl`
 - `%CODEX_HOME%\.codex-global-state.json`
 - `%CODEX_HOME%\agentqueue-tags.json`
+- `%CODEX_HOME%\agentqueue-webhooks.json`
 - `%CODEX_HOME%\process_manager\chat_processes.json`
 - `%CODEX_HOME%\sessions\**\*.jsonl`
 
 Usage metrics come from local `token_count` events in session JSONL files. If those events are not available, the usage panel stays hidden.
 
 Custom tags are stored in AgentQueue's own `%CODEX_HOME%\agentqueue-tags.json` sidecar file. AgentQueue does not write tags into Codex session JSONL files, the session index, or Codex SQLite databases.
+
+Webhook settings are stored in AgentQueue's own `%CODEX_HOME%\agentqueue-webhooks.json` sidecar file. Webhook delivery is opt-in and user-initiated from the dashboard or local config.
 
 If `CODEX_HOME` is not set, the app uses your platform home directory's `.codex` folder.
 

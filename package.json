@@ -1,13 +1,14 @@
 {
   "name": "agentqueue",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Local real-time queue and usage dashboard for Codex agents.",
   "scripts": {
     "start": "node --no-warnings server.js",
     "doctor": "node --no-warnings server.js doctor",
     "update": "node --no-warnings server.js update",
-    "update:check": "node --no-warnings server.js update-check"
+    "update:check": "node --no-warnings server.js update-check",
+    "test": "node --test"
   },
   "bin": {
     "agentqueue": "./server.js"
