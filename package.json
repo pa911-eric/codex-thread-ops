@@ -1,8 +1,8 @@
 {
   "name": "agentqueue",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
-  "description": "Local real-time queue and usage dashboard for Codex agents.",
+  "description": "Local real-time queue and usage dashboard for Codex and Claude Code agents.",
   "scripts": {
     "start": "node --no-warnings server.js",
     "doctor": "node --no-warnings server.js doctor",
@@ -19,6 +19,7 @@
   },
   "keywords": [
     "codex",
+    "claude-code",
     "agentqueue",
     "dashboard",
     "threads",

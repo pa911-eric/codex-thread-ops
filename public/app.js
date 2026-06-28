@@ -635,9 +635,14 @@ function renderCard(thread) {
   return card;
 }
 
+function threadOpenUrl(thread) {
+  return thread?.openUrl || thread?.codexUrl || "";
+}
+
 function openThreadInCodex(thread) {
-  if (!thread?.codexUrl) return;
-  window.location.href = thread.codexUrl;
+  const url = threadOpenUrl(thread);
+  if (!url) return;
+  window.location.href = url;
 }
 
 function getBoardThreads() {
@@ -1004,7 +1009,7 @@ function renderBoard(filtered) {
 
   renderColumnSwitcher(filtered, visibleColumns);
   board.className = state.viewMode === "list" ? "board monitor-list" : "board";
-  board.setAttribute("aria-label", state.viewMode === "list" ? "Codex thread monitor list" : "Codex thread board");
+  board.setAttribute("aria-label", state.viewMode === "list" ? "Agent thread monitor list" : "Agent thread board");
   board.dataset.columnCount = String(visibleColumns.length);
   board.dataset.view = state.viewMode;
 
@@ -1186,7 +1191,7 @@ function renderTimeline(filtered) {
     const open = document.createElement("button");
     open.type = "button";
     open.textContent = "Open";
-    open.title = "Open in Codex";
+    open.title = thread.openLabel || "Open";
     open.addEventListener("click", () => openThreadInCodex(thread));
     const details = document.createElement("button");
     details.type = "button";
@@ -1326,7 +1331,7 @@ function showDetails(threadId) {
     ${thread.liveProcesses?.length ? `<section class="detail-section"><h3>Live Commands</h3>${thread.liveProcesses.map((item) => `<pre>${escapeHtml(item.command)}</pre>`).join("")}</section>` : ""}
     ${renderChildList(thread)}
     <section class="detail-actions">
-      <a class="open-link" href="${escapeHtml(thread.codexUrl)}">Open in Codex</a>
+      <a class="open-link" href="${escapeHtml(threadOpenUrl(thread))}">${escapeHtml(thread.openLabel || "Open")}</a>
       <button id="copyDetailId" type="button">Copy Thread ID</button>
     </section>
   `;
@@ -1402,7 +1407,7 @@ async function markRead(thread, includeChildren = false) {
   const remaining = state.threads.filter((item) => ids.has(item.id) && item.unread);
   if (remaining.length) {
     throw new Error(result.removed
-      ? "Codex marked the thread unread again after refresh"
+      ? "The thread was marked unread again after refresh"
       : "No matching unread state was removed");
   }
 }
@@ -1533,7 +1538,7 @@ async function handleMenuAction(action, actionTarget = null) {
   }
   if (action === "open") openThreadInCodex(thread);
   if (action === "copy-id") await navigator.clipboard.writeText(thread.id);
-  if (action === "copy-link") await navigator.clipboard.writeText(thread.codexUrl);
+  if (action === "copy-link") await navigator.clipboard.writeText(threadOpenUrl(thread));
   if (action === "copy-title") await navigator.clipboard.writeText(getDisplayTitle(thread));
   if (action === "mark-read") await markRead(thread, false);
   if (action === "mark-family-read") await markRead(thread, true);

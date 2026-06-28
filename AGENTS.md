@@ -12,6 +12,12 @@
 - When adding controls, use compact, familiar dashboard patterns such as segmented controls, checkboxes, selects, and icon-capable buttons.
 - Before finishing UI work, verify that text does not overflow controls or overlap adjacent content across desktop and mobile widths.
 
+## Data Providers
+
+- AgentQueue reads either Codex (`~/.codex`) or Claude Code (`~/.claude/projects`) local state, auto-detected at startup and overridable with `AGENTQUEUE_PROVIDER`. Keep both providers working; do not regress the Codex path when changing the Claude path or vice versa.
+- The Codex and Claude readers must converge on the same enriched thread shape consumed by `enrichThread`/`computeSummary`. When you add a thread field, populate it (or a sensible null) in both providers.
+- Reads stay local and non-destructive. AgentQueue writes only its own sidecars (`agentqueue-tags.json`, `agentqueue-webhooks.json`, `agentqueue-localstate.json`) and never mutates an agent's session files, indexes, or databases.
+
 ## Version Management
 
 - Keep `package.json` as the source of truth for the local AgentQueue version. Bump it intentionally when user-facing behavior, install/update flows, or data contracts change.

@@ -4,6 +4,7 @@ const fs = require("fs/promises");
 const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const { execFileSync, spawn } = require("child_process");
 
 let DatabaseSync = null;
@@ -20,6 +21,7 @@ const projectConfig = readJsonFileSync(path.join(root, ".agentqueue.json"), {});
 const installMetadataPath = process.env.AGENTQUEUE_INSTALL_METADATA || path.join(root, ".agentqueue-install.json");
 const home = process.env.USERPROFILE || process.env.HOME || "";
 const codexHome = process.env.CODEX_HOME || projectConfig.codexHome || path.join(home, ".codex");
+const claudeHome = process.env.CLAUDE_HOME || process.env.CLAUDE_CONFIG_DIR || projectConfig.claudeHome || path.join(home, ".claude");
 const defaultRepo = packageJson.repository?.url || "https://github.com/pa911-eric/AgentQueue.git";
 const cliArgs = process.argv.slice(2);
 const command = cliArgs[0] && !cliArgs[0].startsWith("-") ? cliArgs[0] : "start";
@@ -29,14 +31,44 @@ const candidateIndexPaths = [
   path.join(codexHome, "sessions", "session_index.jsonl"),
 ];
 
+// Codex (OpenAI) local state locations.
 const globalStatePath = path.join(codexHome, ".codex-global-state.json");
-const tagsPath = path.join(codexHome, "agentqueue-tags.json");
-const webhooksPath = path.join(codexHome, "agentqueue-webhooks.json");
 const processManagerPath = path.join(codexHome, "process_manager", "chat_processes.json");
 const sessionsRoot = path.join(codexHome, "sessions");
 const stateDbPath = path.join(codexHome, "state_5.sqlite");
 const goalsDbPath = path.join(codexHome, "goals_1.sqlite");
 const logsDbPath = path.join(codexHome, "logs_2.sqlite");
+
+// Claude Code (Anthropic) local state locations.
+const claudeProjectsRoot = path.join(claudeHome, "projects");
+
+// AgentQueue can read either Codex's local state or Claude Code's local state.
+// The runtime is auto-detected from what exists on disk; override with
+// AGENTQUEUE_PROVIDER=claude|codex (or "provider" in .agentqueue.json).
+function detectProvider() {
+  const explicit = String(process.env.AGENTQUEUE_PROVIDER || projectConfig.provider || "").trim().toLowerCase();
+  if (explicit === "claude" || explicit === "codex") return explicit;
+  // An explicitly-set home for exactly one runtime is a strong signal.
+  if (process.env.CODEX_HOME && !process.env.CLAUDE_HOME) return "codex";
+  if (process.env.CLAUDE_HOME && !process.env.CODEX_HOME) return "claude";
+  const codexPresent = fsSync.existsSync(stateDbPath)
+    || candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath))
+    || fsSync.existsSync(sessionsRoot);
+  const claudePresent = fsSync.existsSync(claudeProjectsRoot);
+  if (claudePresent && !codexPresent) return "claude";
+  if (codexPresent && !claudePresent) return "codex";
+  // Both present (ambiguous) or neither: preserve AgentQueue's original Codex default.
+  return claudePresent && !codexPresent ? "claude" : "codex";
+}
+const provider = detectProvider();
+const isClaude = provider === "claude";
+const providerLabel = isClaude ? "Claude Code" : "Codex";
+
+// AgentQueue keeps its own sidecar files next to whichever runtime's state it reads.
+const dataHome = isClaude ? claudeHome : codexHome;
+const tagsPath = path.join(dataHome, "agentqueue-tags.json");
+const webhooksPath = path.join(dataHome, "agentqueue-webhooks.json");
+const localStatePath = path.join(dataHome, "agentqueue-localstate.json");
 function minutesFromEnv(name, fallback, legacyName = null) {
   const value = Number(process.env[name] ?? (legacyName ? process.env[legacyName] : undefined));
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -837,6 +869,14 @@ function buildUsageWindow(label, latest, snapshots) {
 }
 
 async function readUsageMetrics() {
+  if (isClaude) {
+    return {
+      available: false,
+      refreshedAt: new Date().toISOString(),
+      message: "Usage limits are not exposed in Claude Code local state.",
+    };
+  }
+
   if (usageCache.payload && Date.now() < usageCache.expiresAt) return usageCache.payload;
 
   const files = await walkJsonlFiles(sessionsRoot);
@@ -1168,6 +1208,23 @@ async function setThreadState(threadId, updates) {
   }
   if (Object.keys(next).length === 0) throw new Error("No supported state fields provided");
 
+  if (isClaude) {
+    // Claude Code has no global UI-state store, so pins/projectless live in
+    // AgentQueue's own non-destructive sidecar.
+    const localState = await readLocalState();
+    const result = { threadId };
+    if (Object.prototype.hasOwnProperty.call(next, "pinned")) {
+      localState.pinned = setIdInArrayStore(localState.pinned, threadId, next.pinned);
+      result.pinned = localState.pinned.includes(threadId);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, "projectless")) {
+      localState.projectless = setIdInArrayStore(localState.projectless, threadId, next.projectless);
+      result.projectless = localState.projectless.includes(threadId);
+    }
+    await writeLocalState(localState);
+    return result;
+  }
+
   const state = await readJsonFile(globalStatePath, {});
   const atomStateWasString = typeof state["electron-persisted-atom-state"] === "string";
   const atomState = getPersistedAtomState(state);
@@ -1191,6 +1248,9 @@ async function markThreadsRead(threadIds) {
   );
 
   if (ids.size === 0) return { markedIds: [], removed: 0 };
+
+  // Claude Code does not track per-thread unread state, so there is nothing to clear.
+  if (isClaude) return { markedIds: Array.from(ids), removed: 0 };
 
   const state = await readJsonFile(globalStatePath, {});
   const atomStateWasString = typeof state["electron-persisted-atom-state"] === "string";
@@ -1273,6 +1333,10 @@ function enrichThread(thread, context) {
   const permissionMode = cleanPermission(permissions.activePermissionProfile?.id || permissions.sandboxPolicy?.type || localSandbox || "unknown");
   const workspace = thread.cwd || workspaceHints[thread.id] || null;
   const outputDirectory = outputDirs[thread.id] || null;
+  const sessionFilePath = thread.rolloutPath || sessionFilesById.get(thread.id) || null;
+  const deepLink = isClaude
+    ? (sessionFilePath ? pathToFileURL(sessionFilePath).href : "")
+    : `codex://threads/${thread.id}`;
 
   return {
     id: thread.id,
@@ -1306,7 +1370,7 @@ function enrichThread(thread, context) {
     outputDirectory,
     lastPrompt: prompts.at(-1) || thread.preview || null,
     promptCount: prompts.length,
-    sessionFile: thread.rolloutPath || sessionFilesById.get(thread.id) || null,
+    sessionFile: sessionFilePath,
     sessionFileSize: session?.fileSize || null,
     lastToolName: session?.lastToolName || null,
     lastMeaningfulType: session?.lastMeaningfulType || null,
@@ -1323,7 +1387,10 @@ function enrichThread(thread, context) {
     model: thread.model || null,
     reasoningEffort: thread.reasoningEffort || null,
     tags: tagsByThread[thread.id] || [],
-    codexUrl: `codex://threads/${thread.id}`,
+    codexUrl: deepLink,
+    openUrl: deepLink,
+    openLabel: isClaude ? "Open transcript" : "Open in Codex",
+    provider,
     parseError: thread.parse_error || null,
   };
 }
@@ -1356,7 +1423,342 @@ function computeSummary(threads, refreshedAt) {
   };
 }
 
+// AgentQueue-local pin/projectless state for runtimes (like Claude Code) that do
+// not expose their own global UI state. Stored in a sidecar so it is non-destructive.
+async function readLocalState() {
+  const value = await readJsonFile(localStatePath, {});
+  return {
+    pinned: normalizeIdArray(value && value.pinned),
+    projectless: normalizeIdArray(value && value.projectless),
+  };
+}
+
+async function writeLocalState(next) {
+  await writeJsonFileAtomic(localStatePath, {
+    pinned: normalizeIdArray(next.pinned),
+    projectless: normalizeIdArray(next.projectless),
+  });
+}
+
+// ---- Claude Code (Anthropic) data source ----
+// Claude Code stores one append-only JSONL transcript per session under
+// <claudeHome>/projects/<encoded-cwd>/<sessionId>.jsonl. One transcript == one
+// thread, and the filename's UUID is the thread id.
+
+const claudeSessionCache = new Map();
+const COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence", "max_tokens"]);
+
+function claudeContentToText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts = [];
+  for (const block of content) {
+    if (block && typeof block === "object" && block.type === "text" && typeof block.text === "string") {
+      parts.push(block.text);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function isHumanUserLine(item) {
+  if (item.type !== "user") return false;
+  const content = item.message && item.message.content;
+  // Tool results are also recorded as role "user"; they are not human prompts.
+  if (Array.isArray(content) && content.some((block) => block && block.type === "tool_result")) return false;
+  return true;
+}
+
+function addClaudeUsage(totals, usage) {
+  if (!usage || typeof usage !== "object") return;
+  totals.input += Number(usage.input_tokens || 0);
+  totals.output += Number(usage.output_tokens || 0);
+  totals.cacheRead += Number(usage.cache_read_input_tokens || 0);
+  totals.cacheCreate += Number(usage.cache_creation_input_tokens || 0);
+}
+
+function summarizeClaudeLines(lines) {
+  const summary = {
+    latestEventAt: null,
+    lastMeaningfulAt: null,
+    lastMeaningfulType: null,
+    taskCompleteAt: null,
+    finalAnswerAt: null,
+    turnAbortedAt: null,
+    lastAssistantPhase: null,
+    lastToolName: null,
+    lastUserAt: null,
+    lastError: null,
+    eventCount: 0,
+  };
+  const meta = {
+    title: null,
+    firstPrompt: null,
+    cwd: null,
+    gitBranch: null,
+    model: null,
+    version: null,
+    permissionMode: null,
+    createdAt: null,
+    prompts: [],
+  };
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+  let endedWithCompletedTurn = false;
+
+  for (const raw of lines) {
+    let item;
+    try {
+      item = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+
+    const ts = item.timestamp || null;
+    if (item.cwd) meta.cwd = stripWindowsNamespace(item.cwd);
+    if (item.gitBranch) meta.gitBranch = item.gitBranch;
+    if (item.version) meta.version = item.version;
+    if (item.permissionMode) meta.permissionMode = item.permissionMode;
+
+    // Some sessions carry a Claude-written summary line; prefer it as the title.
+    if (item.type === "summary" && typeof item.summary === "string" && !meta.title) {
+      meta.title = item.summary.trim() || null;
+    }
+
+    if (item.type !== "user" && item.type !== "assistant") {
+      // queue-operation / attachment / last-prompt / system: advance the clock only.
+      if (ts) summary.latestEventAt = ts;
+      continue;
+    }
+
+    summary.eventCount += 1;
+    if (ts) {
+      summary.latestEventAt = ts;
+      if (!meta.createdAt) meta.createdAt = ts;
+    }
+
+    if (isHumanUserLine(item)) {
+      const text = claudeContentToText(item.message && item.message.content);
+      if (text) {
+        if (!meta.firstPrompt) meta.firstPrompt = text;
+        meta.prompts.push(text);
+      }
+      summary.lastUserAt = ts;
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "user_message";
+      endedWithCompletedTurn = false;
+      continue;
+    }
+
+    if (item.type === "user") {
+      // A tool result returning to the model: the turn is still in progress.
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "function_call_output";
+      endedWithCompletedTurn = false;
+      continue;
+    }
+
+    // Assistant message.
+    const message = item.message || {};
+    if (message.model) meta.model = message.model;
+    addClaudeUsage(tokens, message.usage);
+    const content = Array.isArray(message.content) ? message.content : [];
+    const toolUse = content.filter((block) => block && block.type === "tool_use");
+    if (toolUse.length) summary.lastToolName = toolUse[toolUse.length - 1].name || summary.lastToolName;
+
+    if (COMPLETE_STOP_REASONS.has(message.stop_reason)) {
+      summary.finalAnswerAt = ts;
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "final_answer";
+      endedWithCompletedTurn = true;
+    } else {
+      // stop_reason "tool_use" (or streaming/null): the model has not finished.
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = toolUse.length ? "function_call" : "assistant_message";
+      endedWithCompletedTurn = false;
+    }
+  }
+
+  // If the transcript ends with the model finishing its reply, treat that as a
+  // completed turn so status mapping mirrors Codex's task_complete behavior.
+  if (endedWithCompletedTurn) {
+    summary.taskCompleteAt = summary.finalAnswerAt;
+    summary.lastMeaningfulType = "task_complete";
+  }
+
+  // Count tokens actually processed for this session. cache_read is excluded
+  // because it represents reused (cached) context rather than new work, and it
+  // otherwise dwarfs the figure by an order of magnitude.
+  const tokensUsed = tokens.input + tokens.output + tokens.cacheCreate;
+  return { summary, meta, tokens, tokensUsed };
+}
+
+async function readClaudeSession(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    const cached = claudeSessionCache.get(filePath);
+    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+      return cached.result;
+    }
+
+    let text;
+    if (stat.size > 12 * 1024 * 1024) {
+      // Very large transcript: read the tail (loses the title but keeps recency).
+      const tail = await readTail(filePath, 4 * 1024 * 1024);
+      text = tail.text;
+    } else {
+      text = await fs.readFile(filePath, "utf8");
+    }
+
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const parsed = summarizeClaudeLines(lines);
+    parsed.summary.filePath = filePath;
+    parsed.summary.fileSize = stat.size;
+    parsed.summary.fileModifiedAt = stat.mtime.toISOString();
+
+    const result = { ...parsed, filePath, stat };
+    claudeSessionCache.set(filePath, { size: stat.size, mtimeMs: stat.mtimeMs, result });
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+function claudeIdFromFile(filePath) {
+  const base = path.basename(filePath, ".jsonl");
+  return base;
+}
+
+async function getClaudeSessionFilesById() {
+  const files = fsSync.existsSync(claudeProjectsRoot) ? await walkJsonlFiles(claudeProjectsRoot) : [];
+  const byId = new Map();
+  for (const filePath of files) {
+    const id = claudeIdFromFile(filePath);
+    if (!isThreadId(id)) continue;
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, filePath);
+      continue;
+    }
+    // If the same session id appears under multiple project dirs, keep the newest.
+    try {
+      if (fsSync.statSync(filePath).mtimeMs > fsSync.statSync(existing).mtimeMs) byId.set(id, filePath);
+    } catch {
+      // Ignore transient stat failures and keep the first match.
+    }
+  }
+  return byId;
+}
+
+function truncate(value, max) {
+  if (!value) return null;
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+async function loadClaudeThreads() {
+  const exists = fsSync.existsSync(claudeProjectsRoot);
+  const sessionFilesById = await getClaudeSessionFilesById();
+  const [tagsByThread, localState] = await Promise.all([readThreadTags(), readLocalState()]);
+
+  const sessionSummaries = new Map();
+  const promptHistory = {};
+  const rawThreads = [];
+
+  await Promise.all(Array.from(sessionFilesById.entries()).map(async ([id, filePath]) => {
+    const parsed = await readClaudeSession(filePath);
+    if (!parsed) return;
+    sessionSummaries.set(id, parsed.summary);
+    promptHistory[id] = parsed.meta.prompts.slice(-50);
+
+    const meta = parsed.meta;
+    const title = truncate(meta.title || meta.firstPrompt, 120) || "Claude session";
+    rawThreads.push({
+      id,
+      thread_name: title,
+      preview: truncate(meta.firstPrompt, 200),
+      rolloutPath: filePath,
+      cwd: meta.cwd || null,
+      source: null,
+      threadSource: "user",
+      parentThreadId: null,
+      agentNickname: null,
+      agentRole: null,
+      createdAt: meta.createdAt,
+      updated_at: parsed.summary.latestEventAt,
+      recencyAt: parsed.summary.latestEventAt,
+      archived: false,
+      sandboxPolicy: meta.permissionMode || null,
+      approvalMode: meta.permissionMode || null,
+      tokensUsed: parsed.tokensUsed,
+      gitBranch: meta.gitBranch || null,
+      gitOriginUrl: null,
+      model: meta.model || null,
+      reasoningEffort: null,
+    });
+  }));
+
+  // Synthetic global state so the shared enrichment path keeps working: prompt
+  // history feeds prompt counts, and pins come from AgentQueue's local sidecar.
+  const state = {
+    "prompt-history": promptHistory,
+    "pinned-thread-ids": localState.pinned,
+    "projectless-thread-ids": localState.projectless,
+  };
+
+  const context = {
+    state,
+    sessionFilesById,
+    processRowsByThread: new Map(),
+    sessionSummaries,
+    spawnEdges: { childrenByParent: new Map(), parentByChild: new Map() },
+    goals: new Map(),
+    logHealth: new Map(),
+    tagsByThread,
+  };
+
+  const threads = rawThreads
+    .map((thread) => enrichThread(thread, context))
+    .sort((a, b) => {
+      const pinnedDelta = Number(b.pinned) - Number(a.pinned);
+      if (pinnedDelta) return pinnedDelta;
+      return new Date(b.activityAt || 0) - new Date(a.activityAt || 0);
+    });
+
+  const refreshedAt = new Date().toISOString();
+  const snapshot = {
+    provider,
+    providerLabel,
+    indexPath: null,
+    stateDbPath: null,
+    goalsDbPath: null,
+    logsDbPath: null,
+    globalStatePath: null,
+    processManagerPath: null,
+    localStatePath,
+    sessionsRoot: claudeProjectsRoot,
+    codexHome: claudeHome,
+    claudeHome,
+    dataHome,
+    statusWindows,
+    refreshedAt,
+    summary: computeSummary(threads, refreshedAt),
+    usage: {
+      available: false,
+      refreshedAt,
+      message: "Usage limits are not exposed in Claude Code local state.",
+    },
+    threads,
+    error: exists ? undefined : `No Claude Code projects directory found at ${claudeProjectsRoot}`,
+  };
+
+  webhookProcessQueue = webhookProcessQueue.then(() => processThreadWebhooks(snapshot)).catch((error) => {
+    console.error(`AgentQueue webhook processing failed: ${error.message}`);
+  });
+  return snapshot;
+}
+
 async function loadThreads() {
+  if (isClaude) return loadClaudeThreads();
+
   const indexPath = await firstExistingPath(candidateIndexPaths);
   const sqliteThreads = readThreadsFromSqlite();
   if (!indexPath && sqliteThreads.length === 0) {
@@ -1401,6 +1803,8 @@ async function loadThreads() {
 
   const refreshedAt = new Date().toISOString();
   const snapshot = {
+    provider,
+    providerLabel,
     indexPath,
     stateDbPath: sqliteThreads.length ? stateDbPath : null,
     goalsDbPath: goals.size ? goalsDbPath : null,
@@ -1503,13 +1907,19 @@ async function readProcessesPayload() {
 function readConfigPayload() {
   return {
     version: packageJson.version || "0.0.0",
+    provider,
+    providerLabel,
     codexHome,
+    claudeHome,
+    dataHome,
     publicDir,
     statusWindows,
     updateCheckEnabled: !boolFromEnv("AGENTQUEUE_UPDATE_CHECK_DISABLED") && boolFromEnv("AGENTQUEUE_UPDATE_CHECK", true),
     projectConfig: {
       port: projectConfig.port || null,
+      provider: projectConfig.provider || null,
       codexHome: projectConfig.codexHome || null,
+      claudeHome: projectConfig.claudeHome || null,
       openBrowser: Boolean(projectConfig.openBrowser),
       recentMinutes: projectConfig.recentMinutes || null,
       completeMinutes: projectConfig.completeMinutes || null,
@@ -1520,7 +1930,30 @@ function readConfigPayload() {
 }
 
 function readSourcesPayload() {
+  if (isClaude) {
+    return {
+      provider,
+      providerLabel,
+      claudeHome,
+      dataHome,
+      claudeProjectsRoot,
+      tagsPath,
+      webhooksPath,
+      localStatePath,
+      sessionsRoot: claudeProjectsRoot,
+      exists: {
+        claudeHome: fsSync.existsSync(claudeHome),
+        claudeProjectsRoot: fsSync.existsSync(claudeProjectsRoot),
+        tags: fsSync.existsSync(tagsPath),
+        webhooks: fsSync.existsSync(webhooksPath),
+        localState: fsSync.existsSync(localStatePath),
+      },
+    };
+  }
+
   return {
+    provider,
+    providerLabel,
     codexHome,
     candidateIndexPaths,
     globalStatePath,
@@ -1577,10 +2010,16 @@ async function runDoctor() {
   const git = getGitInfo();
 
   add(nodeMajor >= 18 ? "pass" : "fail", "Node.js", `${process.version}${nodeMajor >= 24 ? " with node:sqlite support" : " without stable node:sqlite support"}`);
-  add(DatabaseSync ? "pass" : "warn", "SQLite inventory", DatabaseSync ? "node:sqlite is available" : "Node 24+ recommended for Codex SQLite inventory reads");
-  add(fsSync.existsSync(codexHome) ? "pass" : "fail", "CODEX_HOME", codexHome);
-  add(candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)) || fsSync.existsSync(stateDbPath) ? "pass" : "warn", "Thread inventory", "session_index.jsonl or state_5.sqlite");
-  add(fsSync.existsSync(sessionsRoot) ? "pass" : "warn", "Sessions directory", sessionsRoot);
+  add("pass", "Data source", `${providerLabel} (${provider})`);
+  if (isClaude) {
+    add(fsSync.existsSync(claudeHome) ? "pass" : "fail", "CLAUDE_HOME", claudeHome);
+    add(fsSync.existsSync(claudeProjectsRoot) ? "pass" : "warn", "Claude projects", claudeProjectsRoot);
+  } else {
+    add(DatabaseSync ? "pass" : "warn", "SQLite inventory", DatabaseSync ? "node:sqlite is available" : "Node 24+ recommended for Codex SQLite inventory reads");
+    add(fsSync.existsSync(codexHome) ? "pass" : "fail", "CODEX_HOME", codexHome);
+    add(candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)) || fsSync.existsSync(stateDbPath) ? "pass" : "warn", "Thread inventory", "session_index.jsonl or state_5.sqlite");
+    add(fsSync.existsSync(sessionsRoot) ? "pass" : "warn", "Sessions directory", sessionsRoot);
+  }
   add(git.available ? "pass" : "warn", "Git", git.available ? "git command is available" : git.error || "git unavailable");
   add(git.isRepo ? "pass" : "warn", "Install type", git.isRepo ? `git clone on ${git.branch || "detached"} @ ${git.commit}` : "not a git checkout");
   if (git.isRepo) {
@@ -1667,8 +2106,9 @@ async function renderHealthPage() {
   const release = await fetchLatestRelease(git.repo || expectedRepoSlug()).catch((error) => ({ available: false, reason: error.message }));
   const rows = [
     ["Version", packageJson.version || "0.0.0"],
+    ["Source", `${providerLabel} (${provider})`],
     ["Node", process.version],
-    ["CODEX_HOME", codexHome],
+    [isClaude ? "CLAUDE_HOME" : "CODEX_HOME", dataHome],
     ["SQLite", DatabaseSync ? "available" : "unavailable; Node 24+ recommended"],
     ["Git install", git.isRepo ? `${git.repo} ${git.dirty ? "(local changes)" : "(clean)"}` : "not a git checkout"],
     ["Latest release", release.available ? `${release.latestTag}${release.updateAvailable ? " available" : " current"}` : release.reason || "unknown"],
@@ -1698,7 +2138,7 @@ function getOpenApiDocument() {
     info: {
       title: "AgentQueue API",
       version: packageJson.version || "0.0.0",
-      description: "Local API for reading Codex thread state and writing conservative AgentQueue/Codex thread metadata.",
+      description: `Local API for reading ${providerLabel} thread state and writing conservative AgentQueue thread metadata.`,
     },
     servers: [{ url: "/" }],
     tags: [
@@ -1852,7 +2292,7 @@ function getOpenApiDocument() {
       "/api/threads/{threadId}/open": {
         post: {
           tags: ["Integrations"],
-          summary: "Open a thread in Codex using its codex:// deep link.",
+          summary: "Open a thread via its provider deep link (codex:// for Codex, file:// transcript for Claude Code).",
           parameters: [threadIdParameter],
           requestBody: { content: jsonContent({ type: "object", properties: { dryRun: { type: "boolean" } } }) },
           responses: { 200: okResponse("Open result"), 400: errorResponse },
@@ -2108,9 +2548,14 @@ async function handleApiRequest(req, res, url) {
     if (action === "open") {
       if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
       const body = await readRequestJson(req);
-      const codexUrl = `codex://threads/${threadId}`;
-      if (!body.dryRun) openBrowser(codexUrl);
-      sendJson(res, 200, { ok: true, threadId, codexUrl, opened: !body.dryRun });
+      let target = `codex://threads/${threadId}`;
+      if (isClaude) {
+        const filePath = (await getClaudeSessionFilesById()).get(threadId);
+        target = filePath ? pathToFileURL(filePath).href : "";
+      }
+      const opened = Boolean(target) && !body.dryRun;
+      if (opened) openBrowser(target);
+      sendJson(res, 200, { ok: true, threadId, url: target, codexUrl: target, opened });
       return true;
     }
   }
@@ -2144,7 +2589,11 @@ async function handleApiRequest(req, res, url) {
     sendJson(res, 200, {
       ok: true,
       version: packageJson.version || "0.0.0",
+      provider,
+      providerLabel,
       codexHome,
+      claudeHome,
+      dataHome,
       node: process.version,
       sqlite: Boolean(DatabaseSync),
       git: getGitInfo(),

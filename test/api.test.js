@@ -90,15 +90,83 @@ async function createCodexFixture() {
   };
 }
 
+const claudeThreadId = "33333333-3333-4333-8333-333333333333";
+
+async function createClaudeFixture() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agentqueue-claude-"));
+  const claudeHome = path.join(tempRoot, ".claude");
+  const now = Date.now();
+  const earlier = new Date(now - 120_000).toISOString();
+  const mid = new Date(now - 60_000).toISOString();
+  const later = new Date(now).toISOString();
+  const projectDir = path.join(claudeHome, "projects", "-tmp-project");
+
+  await writeJsonl(path.join(projectDir, `${claudeThreadId}.jsonl`), [
+    { type: "queue-operation", operation: "enqueue", timestamp: earlier, sessionId: claudeThreadId, content: "Build the thing" },
+    {
+      type: "user",
+      isSidechain: false,
+      message: { role: "user", content: "Build the thing" },
+      uuid: "u1",
+      timestamp: earlier,
+      cwd: tempRoot,
+      gitBranch: "main",
+      version: "2.1.0",
+      permissionMode: "auto",
+      sessionId: claudeThreadId,
+    },
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-8",
+        stop_reason: "tool_use",
+        usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 200, cache_read_input_tokens: 1000 },
+        content: [{ type: "text", text: "Working on it" }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
+      },
+      uuid: "a1",
+      timestamp: mid,
+      sessionId: claudeThreadId,
+    },
+    {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
+      uuid: "u2",
+      timestamp: mid,
+      sessionId: claudeThreadId,
+    },
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-8",
+        stop_reason: "end_turn",
+        usage: { input_tokens: 20, output_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 1200 },
+        content: [{ type: "text", text: "Done" }],
+      },
+      uuid: "a2",
+      timestamp: later,
+      sessionId: claudeThreadId,
+    },
+  ]);
+
+  return {
+    tempRoot,
+    claudeHome,
+    installMetadataPath: path.join(tempRoot, ".agentqueue-install.json"),
+    env: { CLAUDE_HOME: claudeHome, AGENTQUEUE_PROVIDER: "claude" },
+  };
+}
+
 async function startServer(fixture) {
   const child = spawn(process.execPath, ["--no-warnings", "server.js"], {
     cwd: root,
     env: {
       ...process.env,
       PORT: "0",
-      CODEX_HOME: fixture.codexHome,
       AGENTQUEUE_INSTALL_METADATA: fixture.installMetadataPath,
       AGENTQUEUE_UPDATE_CHECK: "0",
+      ...(fixture.env || { CODEX_HOME: fixture.codexHome }),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -211,7 +279,8 @@ test("AgentQueue API endpoints", async (t) => {
 
     const config = await checkedRequest(server, "/api/config");
     assert.equal(config.status, 200);
-    assert.equal(config.json.version, "0.2.1");
+    assert.equal(config.json.version, require(path.join(root, "package.json")).version);
+    assert.equal(config.json.provider, "codex");
 
     const sources = await checkedRequest(server, "/api/sources");
     assert.equal(sources.status, 200);
@@ -378,5 +447,68 @@ test("AgentQueue API endpoints", async (t) => {
     const missing = await checkedRequest(server, "/api/not-real");
     assert.equal(missing.status, 404);
     assert.equal(missing.json.error, "API endpoint not found");
+  });
+});
+
+test("AgentQueue Claude Code provider", async (t) => {
+  const fixture = await createClaudeFixture();
+  const server = await startServer(fixture);
+  t.after(async () => {
+    await server.stop();
+    await fs.rm(fixture.tempRoot, { recursive: true, force: true });
+  });
+
+  await t.test("reads Claude Code transcripts as threads", async () => {
+    const config = await checkedRequest(server, "/api/config");
+    assert.equal(config.json.provider, "claude");
+    assert.equal(config.json.providerLabel, "Claude Code");
+
+    const snapshot = await checkedRequest(server, "/api/threads");
+    assert.equal(snapshot.status, 200);
+    assert.equal(snapshot.json.provider, "claude");
+    assert.equal(snapshot.json.summary.total, 1);
+
+    const thread = snapshot.json.threads.find((item) => item.id === claudeThreadId);
+    assert.ok(thread, "expected the Claude session to appear as a thread");
+    // Transcript ends with an end_turn assistant message, so the turn is complete.
+    assert.equal(thread.status, "complete");
+    assert.equal(thread.model, "claude-opus-4-8");
+    assert.equal(thread.gitBranch, "main");
+    assert.equal(thread.name, "Build the thing");
+    assert.equal(thread.lastToolName, "Bash");
+    // input+output+cache_creation across both assistant turns: (100+50+200)+(20+30+0).
+    assert.equal(thread.tokensUsed, 400);
+    assert.equal(thread.promptCount, 1);
+    assert.ok(thread.openUrl.startsWith("file://"), "expected a file:// transcript link");
+    assert.equal(thread.openLabel, "Open transcript");
+  });
+
+  await t.test("hides the usage panel for Claude Code", async () => {
+    const usage = await checkedRequest(server, "/api/usage");
+    assert.equal(usage.status, 200);
+    assert.equal(usage.json.available, false);
+  });
+
+  await t.test("stores pin state in the local sidecar", async () => {
+    const pin = await checkedRequest(server, `/api/threads/${claudeThreadId}/state`, {
+      method: "PATCH",
+      body: { pinned: true },
+    });
+    assert.equal(pin.status, 200);
+    assert.equal(pin.json.pinned, true);
+
+    const snapshot = await checkedRequest(server, "/api/threads");
+    const thread = snapshot.json.threads.find((item) => item.id === claudeThreadId);
+    assert.equal(thread.pinned, true);
+
+    const localState = JSON.parse(await fs.readFile(path.join(fixture.claudeHome, "agentqueue-localstate.json"), "utf8"));
+    assert.deepEqual(localState.pinned, [claudeThreadId]);
+  });
+
+  await t.test("reports Claude data sources", async () => {
+    const sources = await checkedRequest(server, "/api/sources");
+    assert.equal(sources.status, 200);
+    assert.equal(sources.json.provider, "claude");
+    assert.equal(sources.json.exists.claudeProjectsRoot, true);
   });
 });

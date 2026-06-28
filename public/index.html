@@ -29,7 +29,7 @@
             <input id="search" type="search" placeholder="thread, project, prompt, id" autocomplete="off" />
           </label>
           <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
-          <button id="refresh" type="button" title="Reload local Codex thread data now">Refresh</button>
+          <button id="refresh" type="button" title="Reload local agent thread data now">Refresh</button>
           <a class="open-link" href="/api/docs" target="_blank" rel="noreferrer" title="Open local AgentQueue API documentation">API Docs</a>
         </section>
 
@@ -112,7 +112,7 @@
 
     <main class="shell">
       <nav id="columnSwitcher" class="column-switcher" aria-label="Column switcher"></nav>
-      <section id="board" class="board" aria-label="Codex thread board"></section>
+      <section id="board" class="board" aria-label="Agent thread board"></section>
     </main>
 
     <aside id="timelinePanel" class="timeline-panel" aria-label="Thread interaction timeline collapsed">
@@ -279,12 +279,12 @@
         </button>
         <div id="tagSubmenu" class="context-submenu" role="menu" aria-label="Tags"></div>
       </div>
-      <button type="button" data-action="open" role="menuitem">Open in Codex</button>
+      <button type="button" data-action="open" role="menuitem">Open Thread</button>
       <button type="button" data-action="mark-read" role="menuitem">Mark as Read</button>
       <button type="button" data-action="mark-family-read" role="menuitem">Mark Thread + Subagents Read</button>
       <hr />
       <button type="button" data-action="copy-id" role="menuitem">Copy ID</button>
-      <button type="button" data-action="copy-link" role="menuitem">Copy Codex Link</button>
+      <button type="button" data-action="copy-link" role="menuitem">Copy Link</button>
       <button type="button" data-action="copy-title" role="menuitem">Copy Title</button>
     </div>
 
