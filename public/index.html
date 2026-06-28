@@ -15,7 +15,10 @@
       <header class="panel-header">
         <div class="panel-title">
           <img src="/agentqueue-logo.png" alt="" />
-          <h1>AgentQueue</h1>
+          <div>
+            <h1>AgentQueue</h1>
+            <p>Thread monitor</p>
+          </div>
         </div>
         <button id="panelToggle" class="menu-button" type="button" aria-expanded="true" aria-controls="controlPanel" aria-label="Collapse controls" title="Collapse controls">
           <span aria-hidden="true"></span>
@@ -23,27 +26,33 @@
       </header>
 
       <div class="panel-body">
+        <section class="panel-section metric-list" aria-label="Dashboard status">
+          <div class="panel-section-header">
+            <p class="eyebrow">State</p>
+            <span id="updatedAt">--</span>
+          </div>
+          <div class="metric-row metric-running"><span>Running</span><strong id="runningThreads">0</strong></div>
+          <div class="metric-row metric-unread"><span>Unread</span><strong id="unreadThreads">0</strong></div>
+          <div class="metric-row"><span>Recent</span><strong id="recentThreads">0</strong></div>
+          <div class="metric-row metric-risk"><span>Risk</span><strong id="riskThreads">0</strong></div>
+          <span id="completeThreads" hidden>0</span>
+          <span id="todayThreads" hidden>0</span>
+          <span id="doneThreads" hidden>0</span>
+        </section>
+
         <section class="panel-section top-actions" aria-label="Dashboard actions">
+          <div class="panel-section-header">
+            <p class="eyebrow">Command</p>
+          </div>
           <label class="search" title="Filter visible threads by title, prompt, project, agent, or id">
             <span>Search</span>
             <input id="search" type="search" placeholder="thread, project, prompt, id" autocomplete="off" />
           </label>
-          <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
-          <button id="refresh" type="button" title="Reload local agent thread data now">Refresh</button>
-          <a class="open-link" href="/api/docs" target="_blank" rel="noreferrer" title="Open local AgentQueue API documentation">API Docs</a>
-        </section>
-
-        <section class="panel-section metric-list" aria-label="Dashboard status">
-          <div class="metric-row live">
-            <span id="updatedAt">--</span>
+          <div class="command-actions">
+            <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
+            <button id="refresh" type="button" title="Reload local agent thread data now">Refresh</button>
+            <a class="open-link" href="/api/docs" target="_blank" rel="noreferrer" title="Open local AgentQueue API documentation">API Docs</a>
           </div>
-          <div class="metric-row"><span>Running</span><strong id="runningThreads">0</strong></div>
-          <div class="metric-row"><span>Unread</span><strong id="unreadThreads">0</strong></div>
-          <div class="metric-row"><span>Recent</span><strong id="recentThreads">0</strong></div>
-          <div class="metric-row"><span>Risk</span><strong id="riskThreads">0</strong></div>
-          <span id="completeThreads" hidden>0</span>
-          <span id="todayThreads" hidden>0</span>
-          <span id="doneThreads" hidden>0</span>
         </section>
 
         <section id="updateNotice" class="panel-section update-notice" hidden aria-label="AgentQueue update">
@@ -60,6 +69,9 @@
         </section>
 
         <section class="panel-section toolbar" aria-label="Board filters">
+          <div class="panel-section-header">
+            <p class="eyebrow">Board Controls</p>
+          </div>
           <div class="sort-control">
             <label class="select-wrap" title="Choose how cards are ordered inside columns">
               <span>Sort</span>
@@ -107,7 +119,7 @@
         </section>
       </div>
 
-      <div id="panelResizeHandle" class="panel-resize-handle" role="separator" aria-label="Resize controls" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="620" aria-valuenow="348" tabindex="0" title="Drag to resize controls"></div>
+      <div id="panelResizeHandle" class="panel-resize-handle" role="separator" aria-label="Resize controls" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="460" aria-valuenow="312" tabindex="0" title="Drag to resize controls"></div>
     </aside>
 
     <main class="shell">
@@ -248,25 +260,36 @@
 
     <template id="cardTemplate">
       <article class="card">
-        <div class="card-main">
-          <div class="card-title-row">
-            <div>
-              <h3></h3>
-              <p class="thread-id"></p>
-            </div>
-            <div class="card-indicators">
-              <span class="unread-indicator" hidden></span>
-              <span class="running-spinner" title="Running thread" aria-hidden="true" hidden></span>
-            </div>
+        <div class="card-header">
+          <div class="card-status-line">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="card-status-text"></span>
+            <span class="running-spinner" title="Running thread" aria-hidden="true" hidden></span>
           </div>
-          <p class="prompt"></p>
+          <span class="unread-indicator" hidden></span>
         </div>
-        <div class="meta-grid"></div>
-        <div class="badges"></div>
+        <h3></h3>
+        <p class="prompt"></p>
+        <div class="card-divider"></div>
+        <div class="card-metadata"></div>
+        <div class="badges" hidden></div>
         <div class="child-summary"></div>
-        <footer>
-          <time></time>
-        </footer>
+        <div class="card-divider"></div>
+        <div class="card-stats">
+          <div>
+            <span>Last Tool</span>
+            <strong class="last-tool"></strong>
+          </div>
+          <div>
+            <span>Tokens Used</span>
+            <strong class="tokens-used"></strong>
+          </div>
+        </div>
+        <div class="card-actions">
+          <button class="card-open" type="button"></button>
+          <button class="card-copy" type="button" aria-label="Copy thread link" title="Copy thread link"></button>
+        </div>
+        <time hidden></time>
       </article>
     </template>
 

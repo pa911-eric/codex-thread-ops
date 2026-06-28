@@ -19,7 +19,7 @@ const state = {
   hideDone: true,
   focusMode: false,
   panelCollapsed: false,
-  panelWidth: 348,
+  panelWidth: 312,
   timelinePanelCollapsed: true,
   timelinePanelWidth: 360,
   usage: null,
@@ -33,9 +33,9 @@ const preferencesKey = "agentqueue-preferences-v1";
 const legacyPreferencesKey = "codex-thread-ops-preferences-v1";
 const dismissedUpdateKey = "agentqueue-dismissed-update";
 const panelWidthDefaults = {
-  min: 280,
-  max: 620,
-  default: 348,
+  min: 260,
+  max: 460,
+  default: 312,
   mobileBreakpoint: 720,
 };
 const timelinePanelWidthDefaults = {
@@ -152,6 +152,7 @@ function savePreferences() {
     hideDone: state.hideDone,
     focusMode: state.focusMode,
     panelCollapsed: state.panelCollapsed,
+    sidebarDesignVersion: 2,
     panelWidth: state.panelWidth,
     timelinePanelCollapsed: state.timelinePanelCollapsed,
     timelinePanelWidth: state.timelinePanelWidth,
@@ -173,7 +174,12 @@ function restorePreferences() {
   if (viewModeDefs.some((mode) => mode.id === prefs.viewMode)) state.viewMode = prefs.viewMode;
   if (columns.some((column) => column.id === prefs.mobileColumn)) state.mobileColumn = prefs.mobileColumn;
   if (Object.hasOwn(prefs, "hideDone")) state.hideDone = Boolean(prefs.hideDone);
-  if (Number.isFinite(Number(prefs.panelWidth))) state.panelWidth = Number(prefs.panelWidth);
+  if (Number.isFinite(Number(prefs.panelWidth))) {
+    const savedPanelWidth = Number(prefs.panelWidth);
+    state.panelWidth = prefs.sidebarDesignVersion >= 2
+      ? savedPanelWidth
+      : Math.min(savedPanelWidth, panelWidthDefaults.default);
+  }
   if (Number.isFinite(Number(prefs.timelinePanelWidth))) state.timelinePanelWidth = Number(prefs.timelinePanelWidth);
   state.focusMode = Boolean(prefs.focusMode);
   state.panelCollapsed = Boolean(prefs.panelCollapsed);
@@ -355,7 +361,7 @@ function getProjectName(thread) {
 }
 
 function getPromptText(thread) {
-  if (thread.threadSource !== "subagent") return thread.preview || thread.lastPrompt || thread.id;
+  if (thread.threadSource !== "subagent") return thread.lastPrompt || thread.preview || thread.id;
   const agent = thread.agentNickname || "subagent";
   return `Delegated to ${agent}. Open details for the full task.`;
 }
@@ -430,6 +436,54 @@ function makeBadge(label, tone = "") {
   badge.className = tone ? `badge ${tone}` : "badge";
   badge.textContent = label;
   return badge;
+}
+
+function makeProviderBadge(thread) {
+  const label = thread.providerLabel || thread.provider || "Provider";
+  const badge = document.createElement("span");
+  badge.className = `badge provider-icon provider-${thread.provider === "claude" ? "claude" : "codex"}`;
+  badge.title = label;
+  badge.setAttribute("aria-label", label);
+
+  const icon = document.createElement("img");
+  icon.src = thread.provider === "claude" ? "/provider-claude.png" : "/provider-codex.png";
+  icon.alt = "";
+  icon.loading = "lazy";
+  badge.append(icon);
+  return badge;
+}
+
+function makeIcon(name) {
+  const paths = {
+    bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 13v2"/><path d="M15 13v2"/>',
+    branch: '<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+    external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  };
+  const icon = document.createElement("span");
+  icon.className = `card-icon icon-${name}`;
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = `<svg viewBox="0 0 24 24" focusable="false">${paths[name] || ""}</svg>`;
+  return icon;
+}
+
+function formatCompactNumber(value) {
+  const number = Math.max(0, Number(value) || 0);
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(number >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}M`;
+  if (number >= 1_000) return `${(number / 1_000).toFixed(number >= 10_000 ? 0 : 1).replace(/\.0$/, "")}K`;
+  return Intl.NumberFormat().format(number);
+}
+
+function makeCardMeta(iconName, value, options = {}) {
+  const item = document.createElement("div");
+  item.className = options.tone ? `card-meta ${options.tone}` : "card-meta";
+  if (options.providerBadge) item.append(makeProviderBadge(options.providerBadge));
+  else item.append(makeIcon(iconName));
+  const text = document.createElement("span");
+  text.textContent = value || "-";
+  item.append(text);
+  return item;
 }
 
 function makeMeta(label, value) {
@@ -569,14 +623,18 @@ function renderCard(thread) {
   card.tabIndex = 0;
 
   const title = card.querySelector("h3");
-  const id = card.querySelector(".thread-id");
+  const statusText = card.querySelector(".card-status-text");
   const prompt = card.querySelector(".prompt");
   const unreadIndicator = card.querySelector(".unread-indicator");
   const runningSpinner = card.querySelector(".running-spinner");
+  const metadata = card.querySelector(".card-metadata");
+  const lastTool = card.querySelector(".last-tool");
+  const tokensUsed = card.querySelector(".tokens-used");
+  const openButton = card.querySelector(".card-open");
+  const copyButton = card.querySelector(".card-copy");
   title.textContent = getDisplayTitle(thread);
   title.title = thread.threadSource === "subagent" ? `Parent: ${getDisplayTitle(thread)}\nSubagent task: ${thread.name}` : thread.name;
-  id.textContent = getDisplaySubtitle(thread);
-  id.title = thread.id;
+  statusText.textContent = displayStatus;
   prompt.textContent = getPromptText(thread);
   prompt.title = getOriginalTask(thread);
   runningSpinner.hidden = displayStatus !== "running";
@@ -586,21 +644,28 @@ function renderCard(thread) {
     unreadIndicator.title = thread.unread ? "Unread thread" : `${stats.unread} unread subagent${stats.unread === 1 ? "" : "s"}`;
   }
 
-  const meta = card.querySelector(".meta-grid");
-  meta.append(makeMeta(displayStatus === "running" ? "Running" : "Activity", formatRelative(thread.activityAt)));
-  if (stats.total) meta.append(makeMeta("Subagents", `${stats.total}${stats.running ? ` / ${stats.running} running` : ""}`));
-  else if (thread.threadSource === "subagent" && thread.agentNickname) meta.append(makeMeta("Agent", thread.agentNickname));
-  if (thread.liveProcessCount || stats.liveProcesses) meta.append(makeMeta("Terminals", thread.liveProcessCount + stats.liveProcesses));
-  if (thread.logHealth?.errors24h || stats.errors) meta.append(makeMeta("Errors", thread.logHealth.errors24h + stats.errors));
-  else if (thread.logHealth?.warnings24h || stats.warnings) meta.append(makeMeta("Warnings", thread.logHealth.warnings24h + stats.warnings));
+  metadata.append(
+    makeCardMeta("bot", thread.model || thread.providerLabel || thread.provider || "unknown", { providerBadge: thread }),
+    makeCardMeta("branch", thread.gitBranch || getDisplaySubtitle(thread)),
+    makeCardMeta("shield", thread.permissionMode || thread.approvalPolicy || "unknown", { tone: thread.fullAccess ? "danger" : "" })
+  );
+  lastTool.textContent = thread.lastToolName || "-";
+  tokensUsed.textContent = formatCompactNumber((thread.tokensUsed || 0) + stats.tokens);
+  const openLabel = document.createElement("span");
+  openLabel.textContent = thread.openLabel || "Open";
+  openButton.append(makeIcon("external"), openLabel);
+  copyButton.append(makeIcon("copy"));
+  openButton.title = thread.openLabel || "Open thread";
+  copyButton.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(threadOpenUrl(thread));
+  });
+  openButton.addEventListener("click", () => openThreadInCodex(thread));
 
   const badges = card.querySelector(".badges");
-  if (thread.providerLabel) badges.append(makeBadge(thread.providerLabel, thread.provider === "claude" ? "provider-claude" : "provider-codex"));
   if (thread.goal?.status === "active" || stats.activeGoals) badges.append(makeBadge(stats.activeGoals > 1 ? `${stats.activeGoals} active goals` : "goal active", "process"));
   for (const tag of getThreadTags(thread, false)) badges.append(makeBadge(tag, "tag"));
-  const projectLabel = getProjectLabel(thread);
-  if (projectLabel) badges.append(makeBadge(projectLabel, "project"));
   if (!badges.children.length) badges.hidden = true;
+  else badges.hidden = false;
 
   const childSummary = card.querySelector(".child-summary");
   if (stats.total) {
@@ -1263,7 +1328,7 @@ function renderDetailBadges(thread) {
   const stats = childStats(thread);
   const badges = [];
   badges.push(makeBadge(thread.statusLabel, thread.status).outerHTML);
-  if (thread.providerLabel) badges.push(makeBadge(thread.providerLabel, thread.provider === "claude" ? "provider-claude" : "provider-codex").outerHTML);
+  if (thread.providerLabel) badges.push(makeProviderBadge(thread).outerHTML);
   if (thread.threadSource === "subagent") badges.push(makeBadge(thread.agentRole ? `subagent ${thread.agentRole}` : "subagent", "strong").outerHTML);
   if (stats.total) badges.push(makeBadge(`${stats.total} subagents`, "strong").outerHTML);
   if (thread.fullAccess) badges.push(makeBadge("full access", "danger").outerHTML);
