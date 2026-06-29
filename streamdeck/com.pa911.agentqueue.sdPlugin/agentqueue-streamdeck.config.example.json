@@ -1,0 +1,4 @@
+{
+  "baseUrl": "http://localhost:4173",
+  "pollMs": 3000
+}

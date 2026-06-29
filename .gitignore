@@ -10,6 +10,7 @@ pnpm-debug.log*
 !.env.example
 .agentqueue.json
 .agentqueue-install.json
+agentqueue-streamdeck.config.json
 *.local
 coverage/
 dist/

@@ -32,6 +32,7 @@ Auto mode reads both Codex and Claude Code when both have local state. Force a s
 - <img width="584" height="349" alt="image" src="https://github.com/user-attachments/assets/371353a4-0c4b-4d80-8706-19303f4304a2" />
 - Tiered sort modes for priority, activity, longest running, and risk first.
 - Local OpenAPI JSON and Swagger UI for API reads, thread/session inspection, tag writes, unread writes, and supported Codex state flags.
+- Optional 2x3 Stream Deck plugin for local Running, Complete, Recent, and Unread counts plus one-tap open actions.
 - Local-only data access. No telemetry, account service, or npm install required.
 
 ## Requirements
@@ -157,6 +158,25 @@ AgentQueue exposes a local JSON API alongside the dashboard:
 - Integrations: `GET /api/events`, `POST /api/threads/{threadId}/open`, `GET /api/processes`, `GET /api/usage`, `GET/PUT /api/webhook`, `POST /api/webhook/test`
 
 Writes are intentionally conservative and routed to the thread's owning provider. Tags are stored in AgentQueue's per-provider sidecar files, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported flags such as `pinned` and `projectless`.
+
+## Stream Deck
+
+The Stream Deck plugin lives in a self-contained top-level folder:
+
+```text
+streamdeck/com.pa911.agentqueue.sdPlugin
+```
+
+It is built for a 2x3 layout:
+
+```text
+Running Count | Complete Count | Recent Count
+Open Running  | Open Complete  | Unread Count
+```
+
+Install it by copying or symlinking the `.sdPlugin` folder into Stream Deck's plugins folder, restarting Stream Deck, and adding the six AgentQueue actions in that order.
+
+Keep AgentQueue running locally. The plugin probes `http://localhost:4173` through `http://localhost:4185`, matching the dashboard's automatic next-port behavior. For a fixed URL, copy `agentqueue-streamdeck.config.example.json` to `agentqueue-streamdeck.config.json` inside the plugin folder and set `baseUrl`.
 
 ## Configuration
 

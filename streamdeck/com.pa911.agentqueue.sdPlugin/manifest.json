@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Actions": [
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "assets/count-running",
+      "Name": "Running Count",
+      "States": [{ "Image": "assets/count-running", "TitleAlignment": "middle", "FontSize": "12" }],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Show AgentQueue running thread count.",
+      "UUID": "com.pa911.agentqueue.running-count"
+    },
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "assets/count-complete",
+      "Name": "Complete Count",
+      "States": [{ "Image": "assets/count-complete", "TitleAlignment": "middle", "FontSize": "12" }],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Show AgentQueue complete thread count.",
+      "UUID": "com.pa911.agentqueue.complete-count"
+    },
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "assets/count-recent",
+      "Name": "Recent Count",
+      "States": [{ "Image": "assets/count-recent", "TitleAlignment": "middle", "FontSize": "12" }],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Show AgentQueue recent thread count.",
+      "UUID": "com.pa911.agentqueue.recent-count"
+    },
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "assets/open-running",
+      "Name": "Open Most Recent Running",
+      "States": [{ "Image": "assets/open-running", "TitleAlignment": "middle", "FontSize": "12" }],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Open the most recently active running AgentQueue thread in Codex.",
+      "UUID": "com.pa911.agentqueue.open-running"
+    },
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "assets/open-complete",
+      "Name": "Open Most Recent Complete",
+      "States": [{ "Image": "assets/open-complete", "TitleAlignment": "middle", "FontSize": "12" }],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Open the most recently completed AgentQueue thread in Codex.",
+      "UUID": "com.pa911.agentqueue.open-complete"
+    },
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "assets/unread-count",
+      "Name": "Unread Count",
+      "States": [{ "Image": "assets/unread-count", "TitleAlignment": "middle", "FontSize": "12" }],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Show AgentQueue unread thread count.",
+      "UUID": "com.pa911.agentqueue.unread-count"
+    }
+  ],
+  "Author": "PA911",
+  "Category": "AgentQueue",
+  "CategoryIcon": "assets/plugin-icon",
+  "CodePathWin": "bin/plugin.js",
+  "CodePathMac": "bin/plugin.js",
+  "CodePath": "bin/plugin.js",
+  "Description": "Display AgentQueue local thread counts and open recent threads from a 2x3 Stream Deck layout.",
+  "Icon": "assets/plugin-icon",
+  "Name": "AgentQueue",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "disabled"
+  },
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "12" }
+  ],
+  "Software": {
+    "MinimumVersion": "6.6"
+  },
+  "SDKVersion": 2,
+  "URL": "https://github.com/pa911-eric/AgentQueue",
+  "UUID": "com.pa911.agentqueue",
+  "Version": "0.4.3.0"
+}
