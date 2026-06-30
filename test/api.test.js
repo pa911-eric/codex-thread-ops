@@ -87,6 +87,7 @@ async function createCodexFixture() {
     tempRoot,
     codexHome,
     installMetadataPath: path.join(tempRoot, ".agentqueue-install.json"),
+    env: { CODEX_HOME: codexHome, AGENTQUEUE_PROVIDER: "codex" },
   };
 }
 

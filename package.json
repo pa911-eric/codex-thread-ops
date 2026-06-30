@@ -3,8 +3,13 @@
   "version": "0.4.4",
   "private": true,
   "description": "Local real-time queue and usage dashboard for Codex and Claude Code agents.",
+  "main": "desktop/main.cjs",
   "scripts": {
     "start": "node --no-warnings server.js",
+    "desktop": "electron .",
+    "desktop:dev": "electron . --dev",
+    "desktop:pack": "electron-builder --win --dir",
+    "desktop:dist": "electron-builder --win nsis",
     "doctor": "node --no-warnings server.js doctor",
     "update": "node --no-warnings server.js update",
     "update:check": "node --no-warnings server.js update-check",
@@ -25,5 +30,41 @@
     "threads",
     "local-first"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.pa911.agentqueue",
+    "productName": "AgentQueue",
+    "artifactName": "AgentQueue-Setup-${version}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "server.js",
+      "package.json",
+      "desktop/**",
+      "public/**",
+      "streamdeck/**",
+      "README.md",
+      "DESIGN.md",
+      "DESKTOP_APP_CONVERSION.md",
+      "LICENSE"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "desktop/assets/app.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AgentQueue",
+      "deleteAppDataOnUninstall": false
+    }
+  }
 }

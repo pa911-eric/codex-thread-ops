@@ -23,8 +23,6 @@ const home = process.env.USERPROFILE || process.env.HOME || "";
 const codexHome = process.env.CODEX_HOME || projectConfig.codexHome || path.join(home, ".codex");
 const claudeHome = process.env.CLAUDE_HOME || process.env.CLAUDE_CONFIG_DIR || projectConfig.claudeHome || path.join(home, ".claude");
 const defaultRepo = packageJson.repository?.url || "https://github.com/pa911-eric/AgentQueue.git";
-const cliArgs = process.argv.slice(2);
-const command = cliArgs[0] && !cliArgs[0].startsWith("-") ? cliArgs[0] : "start";
 
 const candidateIndexPaths = [
   path.join(codexHome, "session_index.jsonl"),
@@ -2882,29 +2880,31 @@ async function handleApiRequest(req, res, url) {
   return false;
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, "http://localhost");
+function createAgentQueueServer() {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
 
-  try {
-    if (url.pathname === "/health") {
-      if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
-      sendText(res, 200, await renderHealthPage(), "text/html; charset=utf-8");
-      return;
+    try {
+      if (url.pathname === "/health") {
+        if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+        sendText(res, 200, await renderHealthPage(), "text/html; charset=utf-8");
+        return;
+      }
+
+      if (await handleApiRequest(req, res, url)) return;
+
+      await serveStatic(res, url.pathname);
+    } catch (error) {
+      if (res.headersSent) {
+        console.error(error.stack || error.message);
+        res.end();
+        return;
+      }
+      const status = /invalid|unsupported|required|must be|too large|JSON/i.test(error.message) ? 400 : 500;
+      sendJson(res, status, { error: error.message });
     }
-
-    if (await handleApiRequest(req, res, url)) return;
-
-    await serveStatic(res, url.pathname);
-  } catch (error) {
-    if (res.headersSent) {
-      console.error(error.stack || error.message);
-      res.end();
-      return;
-    }
-    const status = /invalid|unsupported|required|must be|too large|JSON/i.test(error.message) ? 400 : 500;
-    sendJson(res, status, { error: error.message });
-  }
-});
+  });
+}
 
 async function runWebhookWatcherTick() {
   const config = await readWebhookConfig();
@@ -2924,26 +2924,63 @@ function startWebhookWatcher() {
   }, 3000);
 }
 
-function listen(port, attemptsLeft = 12) {
-  server.once("error", (error) => {
-    if (error.code === "EADDRINUSE" && attemptsLeft > 0) {
-      listen(port + 1, attemptsLeft - 1);
-      return;
-    }
-    throw error;
-  });
+function stopWebhookWatcher() {
+  if (!webhookWatcher) return;
+  clearInterval(webhookWatcher);
+  webhookWatcher = null;
+}
 
-  server.listen(port, () => {
-    const address = server.address();
-    const url = `http://localhost:${address.port}`;
-    console.log(`AgentQueue running at ${url}`);
-    startWebhookWatcher();
-    const shouldOpen = cliArgs.includes("--open") || boolFromEnv("AGENTQUEUE_OPEN", Boolean(projectConfig.openBrowser));
-    if (shouldOpen) openBrowser(url);
+function closeServer(server) {
+  stopWebhookWatcher();
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
   });
 }
 
-async function main() {
+function startAgentQueueServer(options = {}) {
+  const server = options.server || createAgentQueueServer();
+  const startPort = Number(options.port || process.env.PORT || projectConfig.port || 4173);
+  const host = options.host || "127.0.0.1";
+  const attempts = Number.isFinite(Number(options.attempts)) ? Number(options.attempts) : 12;
+  const openOnStart = Boolean(options.openOnStart);
+  const log = options.log === false ? () => {} : (options.log || console.log);
+
+  return new Promise((resolve, reject) => {
+    function listenOn(port, attemptsLeft) {
+      server.once("error", (error) => {
+        if (error.code === "EADDRINUSE" && attemptsLeft > 0) {
+          listenOn(port + 1, attemptsLeft - 1);
+          return;
+        }
+        reject(error);
+      });
+
+      server.listen(port, host, () => {
+        const address = server.address();
+        const selectedPort = typeof address === "object" && address ? address.port : port;
+        const url = `http://${host}:${selectedPort}`;
+        log(`AgentQueue running at ${url}`);
+        startWebhookWatcher();
+        if (openOnStart) openBrowser(url);
+        resolve({
+          server,
+          url,
+          port: selectedPort,
+          host,
+          close: () => closeServer(server),
+        });
+      });
+    }
+
+    listenOn(startPort, attempts);
+  });
+}
+
+async function runAgentQueueCli(argv = process.argv.slice(2)) {
+  const command = argv[0] && !argv[0].startsWith("-") ? argv[0] : "start";
   ensureInstallMetadata();
   if (command === "doctor") {
     await runDoctor();
@@ -2964,10 +3001,23 @@ async function main() {
     return;
   }
 
-  listen(Number(process.env.PORT || projectConfig.port || 4173));
+  const shouldOpen = argv.includes("--open") || boolFromEnv("AGENTQUEUE_OPEN", Boolean(projectConfig.openBrowser));
+  await startAgentQueueServer({
+    port: Number(process.env.PORT || projectConfig.port || 4173),
+    host: "localhost",
+    openOnStart: shouldOpen,
+  });
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message);
-  process.exitCode = 1;
-});
+module.exports = {
+  createAgentQueueServer,
+  startAgentQueueServer,
+  runAgentQueueCli,
+};
+
+if (require.main === module) {
+  runAgentQueueCli().catch((error) => {
+    console.error(error.stack || error.message);
+    process.exitCode = 1;
+  });
+}

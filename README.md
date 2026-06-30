@@ -37,9 +37,22 @@ Auto mode reads both Codex and Claude Code when both have local state. Force a s
 
 ## Requirements
 
-- Node.js 18 or newer.
+- Desktop installer: Windows 10 or newer. Node.js is bundled in the desktop app.
+- Source/manual install: Node.js 18 or newer.
 - Node.js 24 or newer is recommended for Codex because it can read Codex's local SQLite thread inventory through `node:sqlite`. Claude Code reads JSONL transcripts only and does not require SQLite.
 - Local agent state: Codex desktop state in the Codex home directory, and/or Claude Code state in `~/.claude`.
+
+## Install (Windows desktop app)
+
+Download and run the Windows installer:
+
+```text
+AgentQueue-Setup-0.4.4.exe
+```
+
+The desktop app runs the same local AgentQueue dashboard and API inside an installed Windows app. It starts the local server on `127.0.0.1`, opens the dashboard in an AgentQueue window, and keeps a tray icon available for opening the app, opening diagnostics, copying the local URL, toggling start at login, and quitting.
+
+The desktop installer is separate from `build-agentqueue-installer-exe.ps1`, which is the legacy source installer wrapper that downloads the repo and opens the browser-based launcher.
 
 ## Install Now
 
