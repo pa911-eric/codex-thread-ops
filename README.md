@@ -1,6 +1,6 @@
 # AgentQueue
 
-[![Install Now](https://img.shields.io/badge/Install%20Now-Recommended%20Script%20Install-0F172A?style=for-the-badge&logo=powershell)](https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1)
+[![Install Now](https://img.shields.io/badge/Install%20Now-Windows%20EXE-0F172A?style=for-the-badge&logo=windows)](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueue-Setup-0.4.4.exe)
 
 <img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
 
@@ -51,40 +51,6 @@ Download and run the Windows installer:
 The desktop app runs the same local AgentQueue dashboard and API inside an installed Windows app. It starts the local server on `127.0.0.1`, opens the dashboard in an AgentQueue window, and keeps a tray icon available for opening the app, opening diagnostics, copying the local URL, toggling start at login, and quitting.
 
 The desktop installer is separate from `build-agentqueue-installer-exe.ps1`, which is the legacy source installer wrapper that downloads the repo and opens the browser-based launcher.
-
-## Source install
-
-Use the source install flow if you want to run from a cloned checkout or use the portable scripts instead of the desktop app.
-
-One-command source install:
-
-**Windows**
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1 -UseBasicParsing -OutFile $env:TEMP\agentqueue-install.ps1; & $env:TEMP\agentqueue-install.ps1 -Launch"
-```
-
-**macOS / Linux**
-```bash
-curl -fsSL https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.sh -o /tmp/agentqueue-install.sh && \
-chmod +x /tmp/agentqueue-install.sh && \
-bash /tmp/agentqueue-install.sh --launch
-```
-
-Both installers now print explicit step-by-step status, a final summary, and the install log path.
-Install defaults:
-
-- Windows default path: `%LOCALAPPDATA%\AgentQueue`
-- macOS/Linux default path: `~/.local/share/AgentQueue`
-
-If you need a legacy EXE install:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueueInstaller.exe -UseBasicParsing -OutFile $env:TEMP\AgentQueueInstaller.exe; & $env:TEMP\AgentQueueInstaller.exe"
-```
-
-The EXE installer now opens a visible console window and keeps the progress visible while it installs and starts the dashboard.
-
-To install a specific version, use `-Version` (for example, `-Version 0.1.0`) if you clone and run locally.
 
 ## Run
 

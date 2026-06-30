@@ -36,7 +36,6 @@ function createTrayController({
     const startAtLogin = getStartAtLogin(app);
     const menu = Menu.buildFromTemplate([
       { label: "Open AgentQueue", click: () => openWindow("/") },
-      { label: "Open V2 Monitor", click: () => openWindow("/v2") },
       { type: "separator" },
       {
         label: "Start at login",
