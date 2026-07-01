@@ -14,8 +14,8 @@
 
 ## Data Providers
 
-- AgentQueue reads Codex (`~/.codex`) and Claude Code (`~/.claude/projects`) local state in one combined auto-detected board. `AGENTQUEUE_PROVIDER=codex|claude` narrows the board to one provider. Keep both providers working; do not regress the Codex path when changing the Claude path or vice versa.
-- The Codex and Claude readers must converge on the same enriched thread shape consumed by `enrichThread`/`computeSummary`. When you add a thread field, populate it (or a sensible null) in both providers.
+- AgentQueue reads Codex (`~/.codex`), Claude Code (`~/.claude/projects`), and GitHub Copilot Desktop (`~/.copilot/session-state`) local state in one combined auto-detected board. `AGENTQUEUE_PROVIDER=codex|claude|copilot` narrows the board to one provider. Keep all providers working; do not regress one provider path when changing another.
+- The Codex, Claude, and Copilot readers must converge on the same enriched thread shape consumed by `enrichThread`/`computeSummary`. When you add a thread field, populate it (or a sensible null) in every provider.
 - Reads stay local and non-destructive. AgentQueue writes only its own sidecars (`agentqueue-tags.json`, `agentqueue-webhooks.json`, `agentqueue-localstate.json`) and never mutates an agent's session files, indexes, or databases.
 
 ## Version Management

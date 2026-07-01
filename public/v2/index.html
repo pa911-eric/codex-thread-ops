@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentQueue V2 Monitor</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon-32x32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="stylesheet" href="/v2/styles.css" />
+  </head>
+  <body>
+    <header class="v2-shell-shell">
+      <div class="v2-title">
+        <img src="/agentqueue-logo.png" alt="" class="v2-logo" />
+        <div>
+          <p class="v2-eyebrow">Local Monitor</p>
+          <h1>AgentQueue V2</h1>
+        </div>
+      </div>
+      <div class="v2-toolbar">
+        <label class="v2-search" title="Filter by title, workspace, status, reason, or badge">
+          <span>Search</span>
+          <input id="searchInput" type="search" autocomplete="off" placeholder="search threads" />
+        </label>
+        <select id="statusFilter" aria-label="Status filter">
+          <option value="">Status</option>
+          <option value="running">Running</option>
+          <option value="stale_running">Stale Running</option>
+          <option value="needs_attention">Needs Attention</option>
+          <option value="recently_completed">Recently Completed</option>
+          <option value="recent">Recent</option>
+          <option value="quiet">Quiet</option>
+          <option value="unknown">Unknown</option>
+        </select>
+        <label class="v2-toggle">
+          <input id="focusNeedsAttention" type="checkbox" />
+          <span>Focus needs attention</span>
+        </label>
+        <button id="refreshButton" type="button">Refresh</button>
+        <button id="openV1" type="button">Open V1</button>
+      </div>
+    </header>
+
+    <section class="v2-summary" aria-live="polite">
+      <div class="v2-summary-item"><span>Updated</span><strong id="summaryGeneratedAt">--</strong></div>
+      <div class="v2-summary-item"><span>Running</span><strong id="summaryRunning">0</strong></div>
+      <div class="v2-summary-item"><span>Stale</span><strong id="summaryStale">0</strong></div>
+      <div class="v2-summary-item"><span>Needs Attention</span><strong id="summaryNeedsAttention">0</strong></div>
+      <div class="v2-summary-item"><span>Unread</span><strong id="summaryUnread">0</strong></div>
+      <div class="v2-summary-item"><span>Risk</span><strong id="summaryRisk">0</strong></div>
+    </section>
+
+    <main class="v2-monitor-wrap">
+      <section id="health" class="v2-health" hidden>
+        <span id="healthLevel"></span>
+        <div id="healthWarnings"></div>
+      </section>
+
+      <section id="threadRows" class="v2-row-list" aria-label="Thread monitor list"></section>
+
+      <aside id="emptyState" class="v2-empty" hidden>
+        <p>No threads matched the current filters.</p>
+        <p>Refresh after thread activity starts.</p>
+      </aside>
+    </main>
+
+    <aside id="threadDrawer" class="v2-drawer" hidden aria-live="polite">
+      <header>
+        <div>
+          <p class="v2-eyebrow">Thread Detail</p>
+          <h2 id="drawerTitle">--</h2>
+        </div>
+        <button id="drawerClose" type="button">Close</button>
+      </header>
+      <div id="drawerActions" class="v2-drawer-actions"></div>
+      <section id="drawerMain"></section>
+      <section id="drawerTimeline"></section>
+      <section id="drawerDiagnostics"></section>
+    </aside>
+
+    <template id="threadRowTemplate">
+      <article class="v2-row">
+        <div class="v2-row-main">
+          <div class="v2-row-status">
+            <span class="v2-status-chip status-running">Status</span>
+            <span class="v2-confidence">Confidence</span>
+          </div>
+          <p class="v2-row-title"></p>
+          <p class="v2-row-meta"></p>
+          <p class="v2-row-reason"></p>
+          <div class="v2-row-badges"></div>
+        </div>
+        <div class="v2-row-actions">
+          <button type="button" data-action="open">Open</button>
+          <button type="button" data-action="mark-read">Mark Read</button>
+          <button type="button" data-action="edit-tags">Tags</button>
+        </div>
+      </article>
+    </template>
+
+    <template id="drawerActionTemplate">
+      <a class="v2-link" target="_blank" rel="noreferrer">Open in Codex</a>
+      <button type="button" data-drawer-action="copy">Copy ID</button>
+      <button type="button" data-drawer-action="mark-read">Mark Read</button>
+      <button type="button" data-drawer-action="edit-tags">Edit Tags</button>
+    </template>
+
+    <script src="/v2/app.js"></script>
+  </body>
+</html>

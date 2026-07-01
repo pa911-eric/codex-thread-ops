@@ -2,7 +2,7 @@
 
 <img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
 
-A local, dependency-free queue and usage dashboard for Codex and Claude Code power users.
+A local, dependency-free queue and usage dashboard for Codex, Claude Code, and GitHub Copilot Desktop power users.
 
 AgentQueue reads your local agent state and gives you a live board of what is running, what just finished, what needs attention, and how quickly current usage limits are burning down.
 
@@ -12,8 +12,9 @@ AgentQueue auto-detects local agent runtimes and shows every detected source in 
 
 - **Codex** (OpenAI) — reads `~/.codex` SQLite inventory and session rollouts. Full feature set, including the usage-limit panel.
 - **Claude Code** (Anthropic) — reads `~/.claude/projects/**/*.jsonl` session transcripts. One transcript maps to one thread; status, activity, model, token totals, tools, git branch, and prompt history are derived from the transcript.
+- **GitHub Copilot Desktop** — reads `~/.copilot/session-state/<sessionId>/workspace.yaml` and `events.jsonl`. One session directory maps to one thread; status, activity, model, token totals, tools, workspace, and prompt history are derived from the local event stream.
 
-Auto mode reads both Codex and Claude Code when both have local state. Force a single-runtime view with `AGENTQUEUE_PROVIDER=claude` or `AGENTQUEUE_PROVIDER=codex` (or `"provider"` in `.agentqueue.json`). See [Provider differences](#provider-differences) for what changes per runtime.
+Auto mode reads every detected local runtime. Force a single-runtime view with `AGENTQUEUE_PROVIDER=codex`, `AGENTQUEUE_PROVIDER=claude`, or `AGENTQUEUE_PROVIDER=copilot` (or `"provider"` in `.agentqueue.json`). See [Provider differences](#provider-differences) for what changes per runtime.
 
 ## Features
 
@@ -37,8 +38,32 @@ Auto mode reads both Codex and Claude Code when both have local state. Force a s
 
 - Desktop installer: Windows 10 or newer. Node.js is bundled in the desktop app.
 - Source/manual install: Node.js 18 or newer.
-- Node.js 24 or newer is recommended for Codex because it can read Codex's local SQLite thread inventory through `node:sqlite`. Claude Code reads JSONL transcripts only and does not require SQLite.
-- Local agent state: Codex desktop state in the Codex home directory, and/or Claude Code state in `~/.claude`.
+- Node.js 24 or newer is recommended for Codex because it can read Codex's local SQLite thread inventory through `node:sqlite`. Claude Code and GitHub Copilot Desktop read text event files and do not require SQLite.
+- Local agent state: Codex desktop state in the Codex home directory, Claude Code state in `~/.claude`, and/or GitHub Copilot Desktop state in `~/.copilot`.
+
+## Install (Windows desktop app)
+
+Download the Windows installer from the GitHub Release, or build it locally from a source checkout:
+
+```text
+AgentQueue-Setup-0.5.0.exe
+```
+
+The desktop app runs the same local AgentQueue dashboard and API inside an installed Windows app. It starts the local server on `127.0.0.1`, opens the dashboard in an AgentQueue window, and keeps a tray icon available for opening the app, opening diagnostics, copying the local URL, toggling start at login, and quitting.
+
+The desktop installer is separate from `build-agentqueue-installer-exe.ps1`, which is the legacy source installer wrapper that downloads the repo and opens the browser-based launcher.
+
+From a source checkout, run the desktop shell with:
+
+```powershell
+npm run desktop
+```
+
+Build the Windows installer with:
+
+```powershell
+npm run desktop:dist
+```
 
 ## Install (Agent-guided setup)
 
@@ -149,9 +174,14 @@ AgentQueue exposes a local JSON API alongside the dashboard:
 - Swagger UI: `http://localhost:4173/api/docs`
 - OpenAPI JSON: `http://localhost:4173/api/openapi.json`
 - Main snapshot: `GET /api/threads`
+- V2 foundation snapshot: `GET /api/v2/snapshot` (live normalized reads + explainable status)
 - Thread detail: `GET /api/threads/{threadId}`
+- V2 detail endpoint: `GET /api/v2/threads/{threadId}`
+- V2 preference endpoint: `GET /api/v2/preferences`, `PATCH /api/v2/preferences`
 - Session tail and parsed events: `GET /api/threads/{threadId}/session`, `GET /api/threads/{threadId}/events`
 - Writes: `PATCH /api/threads/{threadId}/tags`, `POST /api/threads/{threadId}/read`, `PATCH /api/threads/{threadId}/state`
+- V2 writes: `PATCH /api/v2/threads/{threadId}/tags`, `POST /api/v2/threads/{threadId}/read`
+- V2 monitor shell: `http://localhost:4173/v2`
 - Integrations: `GET /api/events`, `POST /api/threads/{threadId}/open`, `GET /api/processes`, `GET /api/usage`, `GET/PUT /api/webhook`, `POST /api/webhook/test`
 
 Writes are intentionally conservative and routed to the thread's owning provider. Tags are stored in AgentQueue's per-provider sidecar files, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported flags such as `pinned` and `projectless`.
@@ -179,9 +209,10 @@ Keep AgentQueue running locally. The plugin probes `http://localhost:4173` throu
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AGENTQUEUE_PROVIDER` | auto | Force a single data source: `codex` or `claude`. Auto mode reads every detected source. |
+| `AGENTQUEUE_PROVIDER` | auto | Force a single data source: `codex`, `claude`, or `copilot`. Auto mode reads every detected source. |
 | `CODEX_HOME` | `<home>/.codex` | Codex state directory to read. |
 | `CLAUDE_HOME` | `<home>/.claude` | Claude Code state directory to read (also accepts `CLAUDE_CONFIG_DIR`). |
+| `COPILOT_HOME` | `<home>/.copilot` | GitHub Copilot Desktop state directory to read. |
 | `PORT` | `4173` | Starting localhost port. |
 | `AGENTQUEUE_RECENT_MINUTES` | `120` | `Recent` status window. |
 | `AGENTQUEUE_COMPLETE_MINUTES` | `10` | `Complete` status window. |
@@ -252,18 +283,23 @@ The dashboard reads local files only.
 
 - `projects/**/*.jsonl` — one session transcript per thread
 
-Custom tags are stored in AgentQueue's own sidecar files next to each runtime's state (`agentqueue-tags.json`). Webhook settings use the active AgentQueue sidecar (`agentqueue-webhooks.json`); in mixed mode the default Codex-side sidecar drives notifications for the combined board. For Claude Code, pin/projectless flags are stored in a local `agentqueue-localstate.json` sidecar. AgentQueue never writes into the agent's own session files, indexes, or databases.
+**GitHub Copilot Desktop (`COPILOT_HOME`, default `~/.copilot`):**
+
+- `session-state/<sessionId>/workspace.yaml` — session title, workspace, and timestamps
+- `session-state/<sessionId>/events.jsonl` — one event stream per thread
+
+Custom tags are stored in AgentQueue's own sidecar files next to each runtime's state (`agentqueue-tags.json`). Webhook settings use the active AgentQueue sidecar (`agentqueue-webhooks.json`); in mixed mode the default Codex-side sidecar drives notifications for the combined board. For Claude Code and GitHub Copilot Desktop, pin/projectless/archive flags are stored in local `agentqueue-localstate.json` sidecars. AgentQueue never writes into the agent's own session files, indexes, or databases.
 
 Webhook delivery is opt-in and user-initiated from the dashboard or local config.
 
 ### Provider differences
 
-Claude Code's local state does not include everything Codex exposes, so a few fields behave differently for Claude Code threads, including in the mixed Codex + Claude board:
+Claude Code and GitHub Copilot Desktop local state do not include everything Codex exposes, so a few fields behave differently for those threads in a mixed board:
 
-- **Usage limits:** Codex-derived when Codex is active, hidden for Claude-only mode. Claude Code transcripts record per-message token usage but not rate-limit windows. Per-thread token totals (input + output + cache-creation) are still shown.
-- **Unread state:** not tracked by Claude Code, so the unread filter is always empty and "mark read" is a no-op.
-- **Subagents, goals, live processes, log health:** Codex-only; these counts are zero for Claude Code.
-- **Open thread:** Codex uses its `codex://` deep link; Claude Code opens the local session transcript file instead.
+- **Usage limits:** Codex-derived when Codex is active, hidden for non-Codex-only modes. Claude Code and Copilot event streams record token usage differently but not rate-limit windows. Per-thread token totals are still shown when present.
+- **Unread state:** not tracked by Claude Code or Copilot Desktop, so the unread filter is empty for those providers and "mark read" is a no-op.
+- **Subagents, goals, live processes, log health:** Codex-only; these counts are zero for Claude Code and Copilot Desktop.
+- **Open thread:** Codex uses its `codex://` deep link; Claude Code and Copilot Desktop open the local transcript/event file instead.
 
 ## Privacy
 

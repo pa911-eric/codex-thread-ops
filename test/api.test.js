@@ -10,6 +10,7 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const threadId = "11111111-1111-4111-8111-111111111111";
 const secondThreadId = "22222222-2222-4222-8222-222222222222";
+const hiddenCodexThreadId = "44444444-4444-4444-8444-444444444444";
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -64,13 +65,14 @@ async function createCodexFixture() {
   ]);
 
   await writeJson(path.join(codexHome, ".codex-global-state.json"), {
-    "unread-thread-ids": [threadId],
+    "unread-thread-ids": [threadId, secondThreadId],
     "pinned-thread-ids": [secondThreadId],
     "projectless-thread-ids": [],
-    "electron-persisted-atom-state": JSON.stringify({
+    "electron-persisted-atom-state": {
       "prompt-history": { [threadId]: ["Please test the API."] },
       "thread-workspace-root-hints": { [threadId]: tempRoot },
-    }),
+      "unread-thread-ids-by-host-v1": { local: [hiddenCodexThreadId] },
+    },
   });
   await writeJson(path.join(codexHome, "agentqueue-tags.json"), { [threadId]: ["api"] });
   await writeJson(path.join(codexHome, "process_manager", "chat_processes.json"), [
@@ -92,6 +94,7 @@ async function createCodexFixture() {
 }
 
 const claudeThreadId = "33333333-3333-4333-8333-333333333333";
+const copilotThreadId = "55555555-5555-4555-8555-555555555555";
 
 async function createClaudeFixture() {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agentqueue-claude-"));
@@ -159,9 +162,76 @@ async function createClaudeFixture() {
   };
 }
 
+async function createCopilotFixture() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agentqueue-copilot-"));
+  const copilotHome = path.join(tempRoot, ".copilot");
+  const now = Date.now();
+  const earlier = new Date(now - 90_000).toISOString();
+  const later = new Date(now).toISOString();
+  const sessionDir = path.join(copilotHome, "session-state", copilotThreadId);
+
+  await fs.mkdir(sessionDir, { recursive: true });
+  await fs.writeFile(path.join(sessionDir, "workspace.yaml"), [
+    `id: ${copilotThreadId}`,
+    `cwd: ${tempRoot}`,
+    "client_name: github/autopilot",
+    "name: Copilot API Thread",
+    "user_named: true",
+    `created_at: ${earlier}`,
+    `updated_at: ${later}`,
+    "",
+  ].join("\n"), "utf8");
+  await writeJsonl(path.join(sessionDir, "events.jsonl"), [
+    {
+      type: "session.start",
+      data: {
+        sessionId: copilotThreadId,
+        copilotVersion: "1.0.65",
+        startTime: earlier,
+        selectedModel: "gpt-5.3-codex",
+        context: { cwd: tempRoot },
+      },
+      id: "s1",
+      timestamp: earlier,
+    },
+    {
+      type: "user.message",
+      data: { content: "Build the Copilot thing" },
+      id: "u1",
+      timestamp: earlier,
+    },
+    {
+      type: "tool.execution_start",
+      data: { toolCallId: "t1", name: "powershell" },
+      id: "t1",
+      timestamp: later,
+    },
+    {
+      type: "tool.execution_complete",
+      data: { toolCallId: "t1", name: "powershell", success: true },
+      id: "t2",
+      timestamp: later,
+    },
+    {
+      type: "assistant.message",
+      data: { model: "gpt-5.3-codex", content: "Done", outputTokens: 42 },
+      id: "a1",
+      timestamp: later,
+    },
+  ]);
+
+  return {
+    tempRoot,
+    copilotHome,
+    installMetadataPath: path.join(tempRoot, ".agentqueue-install.json"),
+    env: { COPILOT_HOME: copilotHome, AGENTQUEUE_PROVIDER: "copilot" },
+  };
+}
+
 async function createMixedFixture() {
   const codex = await createCodexFixture();
   const claude = await createClaudeFixture();
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agentqueue-mixed-"));
   return {
     codex,
     claude,
@@ -169,6 +239,7 @@ async function createMixedFixture() {
     env: {
       CODEX_HOME: codex.codexHome,
       CLAUDE_HOME: claude.claudeHome,
+      COPILOT_HOME: path.join(tempRoot, ".copilot"),
       AGENTQUEUE_PROVIDER: "",
     },
   };
@@ -352,6 +423,58 @@ test("AgentQueue API endpoints", async (t) => {
     assert.deepEqual(tags.json.threads[threadId], ["api"]);
   });
 
+  await t.test("serves V2 snapshot endpoint", async () => {
+    const snapshot = await checkedRequest(server, "/api/v2/snapshot");
+    assert.equal(snapshot.status, 200);
+    assert.equal(snapshot.json.summary.total, 2);
+    assert.equal(snapshot.json.health.level, "ok");
+    assert.equal(snapshot.json.threads[0].id, "11111111-1111-4111-8111-111111111111");
+    assert.equal(snapshot.json.threads[1].status, "needs_attention");
+    assert.equal(snapshot.json.summary.stale, 0);
+    assert.equal(snapshot.json.summary.needsAttention, 1);
+    assert.equal(snapshot.json.summary.unread, 2);
+    assert.equal(snapshot.json.summary.risk, 1);
+    assert.equal(snapshot.json.threads[0].status, "running");
+    assert.equal(snapshot.json.threads[0].evidence.some((item) => item.kind === "process"), true);
+    assert.ok(snapshot.json.threads[0].evidence.length > 0);
+  });
+
+  await t.test("serves V2 thread detail, tag, read, and preference endpoints", async () => {
+    const detail = await checkedRequest(server, `/api/v2/threads/${threadId}`);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.json.thread.id, threadId);
+    assert.equal(detail.json.thread.title, "API Test Thread");
+    assert.equal(detail.json.actions.canOpen, true);
+    assert.equal(detail.json.actions.canTag, true);
+    assert.equal(detail.json.actions.canMarkRead, true);
+    assert.equal(detail.json.codexHome, fixture.codexHome);
+    assert.equal(detail.json.timeline.some((item) => item.kind === "process"), true);
+    assert.equal(detail.json.sources.some((item) => item.path && item.path.includes("session_index.jsonl")), true);
+
+    const setTags = await checkedRequest(server, `/api/v2/threads/${threadId}/tags`, {
+      method: "PATCH",
+      body: { tags: ["Needs Review", "Needs Review", "api"] },
+    });
+    assert.equal(setTags.status, 200);
+    assert.deepEqual(setTags.json.tags.sort(), ["api", "needs-review"]);
+
+    const markedRead = await checkedRequest(server, `/api/v2/threads/${threadId}/read`, { method: "POST" });
+    assert.equal(markedRead.status, 200);
+    assert.deepEqual(markedRead.json.markedIds, [threadId]);
+
+    const prefGet = await checkedRequest(server, "/api/v2/preferences");
+    assert.equal(prefGet.status, 200);
+    assert.equal(prefGet.json.preferences.version, "v2");
+    assert.equal(prefGet.json.preferences.monitorView, "list");
+
+    const prefPatch = await checkedRequest(server, "/api/v2/preferences", {
+      method: "PATCH",
+      body: { focusNeedsAttention: false },
+    });
+    assert.equal(prefPatch.status, 200);
+    assert.equal(prefPatch.json.preferences.focusNeedsAttention, false);
+  });
+
   await t.test("writes thread tags through current and legacy endpoints", async () => {
     const updated = await checkedRequest(server, `/api/threads/${threadId}/tags`, {
       method: "PATCH",
@@ -369,9 +492,9 @@ test("AgentQueue API endpoints", async (t) => {
   });
 
   await t.test("writes Codex read and supported state flags", async () => {
-    const read = await checkedRequest(server, `/api/threads/${threadId}/read`, { method: "POST" });
+    const read = await checkedRequest(server, `/api/threads/${secondThreadId}/read`, { method: "POST" });
     assert.equal(read.status, 200);
-    assert.deepEqual(read.json.markedIds, [threadId]);
+    assert.deepEqual(read.json.markedIds, [secondThreadId]);
     assert.equal(read.json.removed, 1);
 
     const legacyRead = await checkedRequest(server, "/api/threads/read", {
@@ -380,6 +503,16 @@ test("AgentQueue API endpoints", async (t) => {
     });
     assert.equal(legacyRead.status, 200);
     assert.deepEqual(legacyRead.json.markedIds, [secondThreadId]);
+    assert.equal(legacyRead.json.removed, 0);
+
+    const hiddenRead = await checkedRequest(server, "/api/threads/read", {
+      method: "POST",
+      body: { threadIds: [hiddenCodexThreadId] },
+    });
+    assert.equal(hiddenRead.status, 200);
+    assert.equal(hiddenRead.json.removed, 1);
+    const persistedState = JSON.parse(await fs.readFile(path.join(fixture.codexHome, ".codex-global-state.json"), "utf8"));
+    assert.deepEqual(persistedState["electron-persisted-atom-state"]["unread-thread-ids-by-host-v1"], { local: [] });
 
     const state = await checkedRequest(server, `/api/threads/${threadId}/state`, {
       method: "PATCH",
@@ -540,6 +673,66 @@ test("AgentQueue Claude Code provider", async (t) => {
     assert.equal(sources.status, 200);
     assert.equal(sources.json.provider, "claude");
     assert.equal(sources.json.exists.claudeProjectsRoot, true);
+  });
+});
+
+test("AgentQueue GitHub Copilot Desktop provider", async (t) => {
+  const fixture = await createCopilotFixture();
+  const server = await startServer(fixture);
+  t.after(async () => {
+    await server.stop();
+    await fs.rm(fixture.tempRoot, { recursive: true, force: true });
+  });
+
+  await t.test("reads Copilot session-state as threads", async () => {
+    const config = await checkedRequest(server, "/api/config");
+    assert.equal(config.json.provider, "copilot");
+    assert.equal(config.json.providerLabel, "GitHub Copilot Desktop");
+
+    const snapshot = await checkedRequest(server, "/api/threads");
+    assert.equal(snapshot.status, 200);
+    assert.equal(snapshot.json.provider, "copilot");
+    assert.equal(snapshot.json.summary.total, 1);
+
+    const thread = snapshot.json.threads.find((item) => item.id === copilotThreadId);
+    assert.ok(thread, "expected the Copilot session to appear as a thread");
+    assert.equal(thread.status, "complete");
+    assert.equal(thread.provider, "copilot");
+    assert.equal(thread.model, "gpt-5.3-codex");
+    assert.equal(thread.name, "Copilot API Thread");
+    assert.equal(thread.lastToolName, "powershell");
+    assert.equal(thread.tokensUsed, 42);
+    assert.equal(thread.promptCount, 1);
+    assert.ok(thread.openUrl.startsWith("file://"), "expected a file:// transcript link");
+    assert.equal(thread.openLabel, "Open transcript");
+  });
+
+  await t.test("stores Copilot tags and state in Copilot sidecars", async () => {
+    const tags = await checkedRequest(server, `/api/threads/${copilotThreadId}/tags`, {
+      method: "PATCH",
+      body: { tags: ["copilot"] },
+    });
+    assert.equal(tags.status, 200);
+    assert.deepEqual(tags.json.tags, ["copilot"]);
+
+    const pin = await checkedRequest(server, `/api/threads/${copilotThreadId}/state`, {
+      method: "PATCH",
+      body: { pinned: true },
+    });
+    assert.equal(pin.status, 200);
+    assert.equal(pin.json.pinned, true);
+
+    const savedTags = JSON.parse(await fs.readFile(path.join(fixture.copilotHome, "agentqueue-tags.json"), "utf8"));
+    assert.deepEqual(savedTags[copilotThreadId], ["copilot"]);
+    const localState = JSON.parse(await fs.readFile(path.join(fixture.copilotHome, "agentqueue-localstate.json"), "utf8"));
+    assert.deepEqual(localState.pinned, [copilotThreadId]);
+  });
+
+  await t.test("reports Copilot data sources", async () => {
+    const sources = await checkedRequest(server, "/api/sources");
+    assert.equal(sources.status, 200);
+    assert.equal(sources.json.provider, "copilot");
+    assert.equal(sources.json.exists.copilotSessionStateRoot, true);
   });
 });
 

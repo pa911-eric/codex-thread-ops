@@ -6,6 +6,11 @@ const http = require("http");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 const { execFileSync, spawn } = require("child_process");
+const { buildV2SnapshotFromThreads, buildV2ThreadDetail } = require("./src/v2/api/snapshot");
+const { readV2RawThreads, enrichThreadsWithTags } = require("./src/v2/codex-state/reader");
+const { readTagsByThread: readV2TagsByThread, setThreadTags: setV2ThreadTags } = require("./src/v2/store/tags");
+const { readPreferences, patchPreferences } = require("./src/v2/store/preferences");
+const { ATTENTION_REASONS, ATTENTION_REASON_ENUM, CONFIDENCE_LEVELS, EVIDENCE_KINDS, THREAD_STATUSES } = require("./src/v2/contracts/thread-contracts");
 
 let DatabaseSync = null;
 try {
@@ -22,6 +27,7 @@ const installMetadataPath = process.env.AGENTQUEUE_INSTALL_METADATA || path.join
 const home = process.env.USERPROFILE || process.env.HOME || "";
 const codexHome = process.env.CODEX_HOME || projectConfig.codexHome || path.join(home, ".codex");
 const claudeHome = process.env.CLAUDE_HOME || process.env.CLAUDE_CONFIG_DIR || projectConfig.claudeHome || path.join(home, ".claude");
+const copilotHome = process.env.COPILOT_HOME || projectConfig.copilotHome || path.join(home, ".copilot");
 const defaultRepo = packageJson.repository?.url || "https://github.com/pa911-eric/AgentQueue.git";
 
 const candidateIndexPaths = [
@@ -40,6 +46,11 @@ const logsDbPath = path.join(codexHome, "logs_2.sqlite");
 // Claude Code (Anthropic) local state locations.
 const claudeProjectsRoot = path.join(claudeHome, "projects");
 
+// GitHub Copilot Desktop local state locations.
+const copilotSessionStateRoot = path.join(copilotHome, "session-state");
+const copilotDataDbPath = path.join(copilotHome, "data.db");
+const copilotSessionStoreDbPath = path.join(copilotHome, "session-store.db");
+
 function codexStatePresent() {
   return fsSync.existsSync(stateDbPath)
     || candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath))
@@ -50,29 +61,38 @@ function claudeStatePresent() {
   return fsSync.existsSync(claudeProjectsRoot);
 }
 
+function copilotStatePresent() {
+  return fsSync.existsSync(copilotSessionStateRoot);
+}
+
 // Auto mode reads every local runtime with state. Override with
-// AGENTQUEUE_PROVIDER=claude|codex (or "provider" in .agentqueue.json).
+// AGENTQUEUE_PROVIDER=claude|codex|copilot (or "provider" in .agentqueue.json).
 function detectProviders() {
   const explicit = String(process.env.AGENTQUEUE_PROVIDER || projectConfig.provider || "").trim().toLowerCase();
-  if (explicit === "claude" || explicit === "codex") return [explicit];
+  if (explicit === "claude" || explicit === "codex" || explicit === "copilot") return [explicit];
   const detected = [];
   if (codexStatePresent()) detected.push("codex");
   if (claudeStatePresent()) detected.push("claude");
+  if (copilotStatePresent()) detected.push("copilot");
   return detected.length ? detected : ["codex"];
 }
 const activeProviders = detectProviders();
 const provider = activeProviders.length > 1 ? "mixed" : activeProviders[0];
-const providerLabel = provider === "mixed" ? "Codex + Claude Code" : (provider === "claude" ? "Claude Code" : "Codex");
-const providerLabels = { codex: "Codex", claude: "Claude Code", mixed: "Codex + Claude Code" };
+const providerLabels = { codex: "Codex", claude: "Claude Code", copilot: "GitHub Copilot Desktop", mixed: "Mixed" };
+const providerLabel = provider === "mixed"
+  ? activeProviders.map((name) => providerLabels[name] || name).join(" + ")
+  : providerLabels[provider] || provider;
 
 // AgentQueue keeps sidecar files next to each runtime's state.
-const dataHome = provider === "claude" ? claudeHome : codexHome;
+const dataHome = provider === "claude" ? claudeHome : (provider === "copilot" ? copilotHome : codexHome);
 const codexTagsPath = path.join(codexHome, "agentqueue-tags.json");
 const claudeTagsPath = path.join(claudeHome, "agentqueue-tags.json");
+const copilotTagsPath = path.join(copilotHome, "agentqueue-tags.json");
 const tagsPath = path.join(dataHome, "agentqueue-tags.json");
 const webhooksPath = path.join(dataHome, "agentqueue-webhooks.json");
 const claudeLocalStatePath = path.join(claudeHome, "agentqueue-localstate.json");
-const localStatePath = claudeLocalStatePath;
+const copilotLocalStatePath = path.join(copilotHome, "agentqueue-localstate.json");
+const localStatePath = provider === "copilot" ? copilotLocalStatePath : claudeLocalStatePath;
 function minutesFromEnv(name, fallback, legacyName = null) {
   const value = Number(process.env[name] ?? (legacyName ? process.env[legacyName] : undefined));
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -596,13 +616,24 @@ async function writeThreadTags(tagsByThread, filePath = tagsPath) {
   await writeJsonFileAtomic(filePath, tagsByThread);
 }
 
+function tagsPathForProvider(sourceProvider) {
+  if (sourceProvider === "claude") return claudeTagsPath;
+  if (sourceProvider === "copilot") return copilotTagsPath;
+  return codexTagsPath;
+}
+
+function localStatePathForProvider(sourceProvider) {
+  if (sourceProvider === "copilot") return copilotLocalStatePath;
+  return claudeLocalStatePath;
+}
+
 async function setThreadTags(threadId, tags, sourceProvider = null) {
   if (typeof threadId !== "string" || !/^[0-9a-f-]{36}$/i.test(threadId)) {
     throw new Error("Invalid thread id");
   }
 
   const targetProvider = sourceProvider || await getThreadProvider(threadId) || provider;
-  const filePath = targetProvider === "claude" ? claudeTagsPath : codexTagsPath;
+  const filePath = tagsPathForProvider(targetProvider);
   const tagsByThread = await readThreadTags(filePath);
   const clean = cleanTags(tags);
   if (clean.length) tagsByThread[threadId] = clean;
@@ -930,7 +961,7 @@ async function readUsageMetrics() {
     return {
       available: false,
       refreshedAt: new Date().toISOString(),
-      message: "Usage limits are not exposed in Claude Code local state.",
+      message: "Usage limits are only exposed by Codex local state.",
     };
   }
 
@@ -1275,10 +1306,11 @@ async function setThreadState(threadId, updates, sourceProvider = null) {
   if (Object.keys(next).length === 0) throw new Error("No supported state fields provided");
 
   const targetProvider = sourceProvider || await getThreadProvider(threadId) || provider;
-  if (targetProvider === "claude") {
-    // Claude Code has no global UI-state store, so pins/projectless/archive live in
+  if (targetProvider === "claude" || targetProvider === "copilot") {
+    // Some runtimes have no global UI-state store, so pins/projectless/archive live in
     // AgentQueue's own non-destructive sidecar.
-    const localState = await readLocalState();
+    const targetLocalStatePath = localStatePathForProvider(targetProvider);
+    const localState = await readLocalState(targetLocalStatePath);
     const result = { threadId };
     if (Object.prototype.hasOwnProperty.call(next, "pinned")) {
       localState.pinned = setIdInArrayStore(localState.pinned, threadId, next.pinned);
@@ -1292,7 +1324,7 @@ async function setThreadState(threadId, updates, sourceProvider = null) {
       localState.archived = setIdInArrayStore(localState.archived, threadId, next.archived);
       result.archived = localState.archived.includes(threadId);
     }
-    await writeLocalState(localState);
+    await writeLocalState(localState, targetLocalStatePath);
     return result;
   }
 
@@ -1325,9 +1357,9 @@ async function markThreadsRead(threadIds, sourceProvider = null) {
 
   const codexIds = sourceProvider
     ? (sourceProvider === "codex" ? ids : new Set())
-    : await filterThreadIdsByProvider(ids, "codex");
+    : (provider === "codex" ? ids : await filterThreadIdsByProvider(ids, "codex"));
 
-  // Claude Code does not track per-thread unread state, so there is nothing to clear.
+  // Other providers do not expose compatible unread state, so there is nothing to clear.
   if (codexIds.size === 0) return { markedIds: Array.from(ids), removed: 0 };
 
   const state = await readJsonFile(globalStatePath, {});
@@ -1414,9 +1446,9 @@ function enrichThread(thread, context) {
   const workspace = thread.cwd || workspaceHints[thread.id] || null;
   const outputDirectory = outputDirs[thread.id] || null;
   const sessionFilePath = thread.rolloutPath || sessionFilesById.get(thread.id) || null;
-  const deepLink = threadProvider === "claude"
-    ? (sessionFilePath ? pathToFileURL(sessionFilePath).href : "")
-    : `codex://threads/${thread.id}`;
+  const deepLink = threadProvider === "codex"
+    ? `codex://threads/${thread.id}`
+    : (sessionFilePath ? pathToFileURL(sessionFilePath).href : "");
 
   return {
     id: thread.id,
@@ -1470,7 +1502,7 @@ function enrichThread(thread, context) {
     tags: tagsByThread[thread.id] || [],
     codexUrl: deepLink,
     openUrl: deepLink,
-    openLabel: threadProvider === "claude" ? "Open transcript" : "Open in Codex",
+    openLabel: threadProvider === "codex" ? "Open in Codex" : "Open transcript",
     provider: threadProvider,
     providerLabel: providerLabels[threadProvider] || threadProvider,
     parseError: thread.parse_error || null,
@@ -1507,8 +1539,8 @@ function computeSummary(threads, refreshedAt) {
 
 // AgentQueue-local pin/projectless state for runtimes (like Claude Code) that do
 // not expose their own global UI state. Stored in a sidecar so it is non-destructive.
-async function readLocalState() {
-  const value = await readJsonFile(localStatePath, {});
+async function readLocalState(filePath = localStatePath) {
+  const value = await readJsonFile(filePath, {});
   return {
     pinned: normalizeIdArray(value && value.pinned),
     projectless: normalizeIdArray(value && value.projectless),
@@ -1516,8 +1548,8 @@ async function readLocalState() {
   };
 }
 
-async function writeLocalState(next) {
-  await writeJsonFileAtomic(localStatePath, {
+async function writeLocalState(next, filePath = localStatePath) {
+  await writeJsonFileAtomic(filePath, {
     pinned: normalizeIdArray(next.pinned),
     projectless: normalizeIdArray(next.projectless),
     archived: normalizeIdArray(next.archived),
@@ -1741,7 +1773,7 @@ function truncate(value, max) {
 async function loadClaudeThreads() {
   const exists = fsSync.existsSync(claudeProjectsRoot);
   const sessionFilesById = await getClaudeSessionFilesById();
-  const [tagsByThread, localState] = await Promise.all([readThreadTags(claudeTagsPath), readLocalState()]);
+  const [tagsByThread, localState] = await Promise.all([readThreadTags(claudeTagsPath), readLocalState(claudeLocalStatePath)]);
 
   const sessionSummaries = new Map();
   const promptHistory = {};
@@ -1844,6 +1876,348 @@ async function loadClaudeThreads() {
   return snapshot;
 }
 
+// ---- GitHub Copilot Desktop data source ----
+// Copilot Desktop stores one session directory per chat under
+// <copilotHome>/session-state/<sessionId>. workspace.yaml carries user-facing
+// metadata and events.jsonl carries the append-only interaction stream.
+
+const copilotSessionCache = new Map();
+
+async function getCopilotSessionFilesById() {
+  const byId = new Map();
+  let entries = [];
+  try {
+    entries = await fs.readdir(copilotSessionStateRoot, { withFileTypes: true });
+  } catch {
+    return byId;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isThreadId(entry.name)) continue;
+    const eventsPath = path.join(copilotSessionStateRoot, entry.name, "events.jsonl");
+    if (fsSync.existsSync(eventsPath)) byId.set(entry.name, eventsPath);
+  }
+  return byId;
+}
+
+function parseCopilotYaml(text) {
+  const result = {};
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!match) continue;
+    result[match[1]] = match[2].trim();
+  }
+  return result;
+}
+
+async function readCopilotWorkspace(sessionDir) {
+  const workspacePath = path.join(sessionDir, "workspace.yaml");
+  try {
+    return parseCopilotYaml(await fs.readFile(workspacePath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function copilotContentToText(content) {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item.text === "string") return item.text;
+        if (item && typeof item.content === "string") return item.content;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") return content.text.trim();
+    if (typeof content.content === "string") return content.content.trim();
+  }
+  return "";
+}
+
+function summarizeCopilotLines(lines, workspace = {}) {
+  const summary = {
+    latestEventAt: null,
+    lastMeaningfulAt: null,
+    lastMeaningfulType: null,
+    taskCompleteAt: null,
+    finalAnswerAt: null,
+    turnAbortedAt: null,
+    lastAssistantPhase: null,
+    lastToolName: null,
+    lastUserAt: null,
+    lastError: null,
+    eventCount: 0,
+  };
+  const meta = {
+    title: workspace.name || null,
+    firstPrompt: null,
+    cwd: workspace.cwd ? stripWindowsNamespace(workspace.cwd) : null,
+    gitBranch: null,
+    model: null,
+    version: null,
+    permissionMode: null,
+    createdAt: workspace.created_at || null,
+    updatedAt: workspace.updated_at || null,
+    prompts: [],
+    remoteUrl: null,
+  };
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let endedWithAssistantTurn = false;
+
+  for (const raw of lines) {
+    let item;
+    try {
+      item = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const ts = item.timestamp || null;
+    const data = item.data && typeof item.data === "object" ? item.data : {};
+    summary.eventCount += 1;
+    if (ts) summary.latestEventAt = ts;
+
+    if (item.type === "session.start" || item.type === "session.resume") {
+      meta.model = data.selectedModel || meta.model;
+      meta.version = data.copilotVersion || meta.version;
+      meta.cwd = stripWindowsNamespace(data.context?.cwd || meta.cwd || "");
+      if (data.startTime && !meta.createdAt) meta.createdAt = data.startTime;
+      continue;
+    }
+    if (item.type === "session.model_change") {
+      meta.model = data.newModel || meta.model;
+      continue;
+    }
+    if (item.type === "session.info") {
+      meta.remoteUrl = data.url || meta.remoteUrl;
+      continue;
+    }
+    if (item.type === "user.message") {
+      const text = copilotContentToText(data.content || data.message || data.prompt);
+      if (text) {
+        if (!meta.firstPrompt) meta.firstPrompt = text;
+        meta.prompts.push(text);
+      }
+      summary.lastUserAt = ts;
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "user_message";
+      endedWithAssistantTurn = false;
+      continue;
+    }
+    if (item.type === "hook.start" && data.hookType === "userPromptSubmitted") {
+      const text = copilotContentToText(data.input?.prompt);
+      if (text) {
+        if (!meta.firstPrompt) meta.firstPrompt = text;
+        meta.prompts.push(text);
+        summary.lastUserAt = ts;
+        summary.lastMeaningfulAt = ts;
+        summary.lastMeaningfulType = "user_message";
+        endedWithAssistantTurn = false;
+      }
+      continue;
+    }
+    if (item.type === "assistant.message") {
+      meta.model = data.model || meta.model;
+      outputTokens += Number(data.outputTokens || 0);
+      const toolRequests = Array.isArray(data.toolRequests) ? data.toolRequests : [];
+      const lastTool = toolRequests.at(-1);
+      if (lastTool) summary.lastToolName = lastTool.name || lastTool.toolName || summary.lastToolName;
+      summary.lastAssistantPhase = data.phase || summary.lastAssistantPhase;
+      summary.finalAnswerAt = ts;
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = toolRequests.length ? "function_call" : "final_answer";
+      endedWithAssistantTurn = !toolRequests.length;
+      continue;
+    }
+    if (item.type === "tool.execution_start" || item.type === "external_tool.requested") {
+      summary.lastToolName = data.name || data.toolName || data.toolCallId || summary.lastToolName;
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "function_call";
+      endedWithAssistantTurn = false;
+      continue;
+    }
+    if (item.type === "tool.execution_complete" || item.type === "external_tool.completed") {
+      summary.lastToolName = data.name || data.toolName || data.toolCallId || summary.lastToolName;
+      if (data.success === false) summary.lastError = "Tool execution failed";
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "function_call_output";
+      endedWithAssistantTurn = false;
+      continue;
+    }
+    if (item.type === "abort") {
+      summary.turnAbortedAt = ts;
+      summary.lastMeaningfulAt = ts;
+      summary.lastMeaningfulType = "turn_aborted";
+      summary.lastError = data.reason || summary.lastError;
+      endedWithAssistantTurn = false;
+      continue;
+    }
+    if (item.type === "session.shutdown") {
+      meta.model = data.currentModel || meta.model;
+      inputTokens += Number(data.currentTokens || 0);
+      if (endedWithAssistantTurn) {
+        summary.taskCompleteAt = summary.finalAnswerAt || ts;
+        summary.lastMeaningfulType = "task_complete";
+      }
+      continue;
+    }
+  }
+
+  if (endedWithAssistantTurn && !summary.taskCompleteAt) {
+    summary.taskCompleteAt = summary.finalAnswerAt;
+    summary.lastMeaningfulType = "task_complete";
+  }
+
+  return { summary, meta, tokensUsed: inputTokens + outputTokens };
+}
+
+async function readCopilotSession(eventsPath) {
+  try {
+    const stat = await fs.stat(eventsPath);
+    const workspacePath = path.join(path.dirname(eventsPath), "workspace.yaml");
+    let workspaceMtimeMs = 0;
+    try {
+      workspaceMtimeMs = (await fs.stat(workspacePath)).mtimeMs;
+    } catch {
+      workspaceMtimeMs = 0;
+    }
+    const cached = copilotSessionCache.get(eventsPath);
+    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.workspaceMtimeMs === workspaceMtimeMs) {
+      return cached.result;
+    }
+
+    const workspace = await readCopilotWorkspace(path.dirname(eventsPath));
+    let text;
+    if (stat.size > 12 * 1024 * 1024) {
+      const tail = await readTail(eventsPath, 4 * 1024 * 1024);
+      text = tail.text;
+    } else {
+      text = await fs.readFile(eventsPath, "utf8");
+    }
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const parsed = summarizeCopilotLines(lines, workspace);
+    parsed.summary.filePath = eventsPath;
+    parsed.summary.fileSize = stat.size;
+    parsed.summary.fileModifiedAt = stat.mtime.toISOString();
+
+    const result = { ...parsed, filePath: eventsPath, stat };
+    copilotSessionCache.set(eventsPath, { size: stat.size, mtimeMs: stat.mtimeMs, workspaceMtimeMs, result });
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+async function loadCopilotThreads() {
+  const exists = fsSync.existsSync(copilotSessionStateRoot);
+  const sessionFilesById = await getCopilotSessionFilesById();
+  const [tagsByThread, localState] = await Promise.all([readThreadTags(copilotTagsPath), readLocalState(copilotLocalStatePath)]);
+
+  const sessionSummaries = new Map();
+  const promptHistory = {};
+  const rawThreads = [];
+
+  await Promise.all(Array.from(sessionFilesById.entries()).map(async ([id, filePath]) => {
+    const parsed = await readCopilotSession(filePath);
+    if (!parsed) return;
+    sessionSummaries.set(id, parsed.summary);
+    promptHistory[id] = parsed.meta.prompts.slice(-50);
+
+    const meta = parsed.meta;
+    const title = truncate(meta.title || meta.firstPrompt, 120) || "Copilot session";
+    rawThreads.push({
+      id,
+      title,
+      thread_name: title,
+      preview: truncate(meta.firstPrompt, 200),
+      rolloutPath: filePath,
+      cwd: meta.cwd || null,
+      source: meta.remoteUrl || null,
+      threadSource: "user",
+      parentThreadId: null,
+      agentNickname: null,
+      agentRole: null,
+      createdAt: meta.createdAt,
+      updated_at: meta.updatedAt || parsed.summary.latestEventAt,
+      recencyAt: parsed.summary.latestEventAt || meta.updatedAt,
+      archived: false,
+      sandboxPolicy: meta.permissionMode || null,
+      approvalMode: meta.permissionMode || null,
+      tokensUsed: parsed.tokensUsed,
+      gitBranch: meta.gitBranch || null,
+      gitOriginUrl: null,
+      model: meta.model || null,
+      reasoningEffort: null,
+    });
+  }));
+
+  const state = {
+    "prompt-history": promptHistory,
+    "pinned-thread-ids": localState.pinned,
+    "projectless-thread-ids": localState.projectless,
+    "archived-thread-ids": localState.archived,
+  };
+
+  const context = {
+    state,
+    sessionFilesById,
+    processRowsByThread: new Map(),
+    sessionSummaries,
+    spawnEdges: { childrenByParent: new Map(), parentByChild: new Map() },
+    goals: new Map(),
+    logHealth: new Map(),
+    tagsByThread,
+    provider: "copilot",
+  };
+
+  const threads = rawThreads
+    .map((thread) => enrichThread(thread, context))
+    .sort((a, b) => {
+      const pinnedDelta = Number(b.pinned) - Number(a.pinned);
+      if (pinnedDelta) return pinnedDelta;
+      return new Date(b.activityAt || 0) - new Date(a.activityAt || 0);
+    });
+
+  const refreshedAt = new Date().toISOString();
+  const snapshot = {
+    provider: "copilot",
+    providerLabel: providerLabels.copilot,
+    indexPath: null,
+    stateDbPath: null,
+    goalsDbPath: null,
+    logsDbPath: null,
+    globalStatePath: null,
+    processManagerPath: null,
+    localStatePath: copilotLocalStatePath,
+    sessionsRoot: copilotSessionStateRoot,
+    copilotHome,
+    dataHome: copilotHome,
+    tagsPath: copilotTagsPath,
+    statusWindows,
+    refreshedAt,
+    summary: computeSummary(threads, refreshedAt),
+    usage: {
+      available: false,
+      refreshedAt,
+      message: "Usage limits are not exposed in GitHub Copilot Desktop local state.",
+    },
+    threads,
+    error: exists ? undefined : `No GitHub Copilot Desktop session-state directory found at ${copilotSessionStateRoot}`,
+  };
+
+  webhookProcessQueue = webhookProcessQueue.then(() => processThreadWebhooks(snapshot)).catch((error) => {
+    console.error(`AgentQueue webhook processing failed: ${error.message}`);
+  });
+  return snapshot;
+}
+
 async function loadCodexThreads() {
   const indexPath = await firstExistingPath(candidateIndexPaths);
   const sqliteThreads = readThreadsFromSqlite();
@@ -1919,9 +2293,12 @@ async function loadCodexThreads() {
 }
 
 async function loadThreads() {
-  const snapshots = await Promise.all(activeProviders.map((name) => (
-    name === "claude" ? loadClaudeThreads() : loadCodexThreads()
-  )));
+  const loaderByProvider = {
+    codex: loadCodexThreads,
+    claude: loadClaudeThreads,
+    copilot: loadCopilotThreads,
+  };
+  const snapshots = await Promise.all(activeProviders.map((name) => loaderByProvider[name]()));
   if (snapshots.length === 1) {
     return {
       ...snapshots[0],
@@ -1960,6 +2337,7 @@ async function loadThreads() {
     sessionsRoot: codexSnapshot?.sessionsRoot || null,
     codexHome,
     claudeHome,
+    copilotHome,
     dataHome,
     statusWindows,
     refreshedAt,
@@ -1990,6 +2368,32 @@ async function filterThreadIdsByProvider(ids, targetProvider) {
       .map((thread) => thread.id)
   );
   return allowed;
+}
+
+async function loadV2SnapshotPayload(now = new Date()) {
+  const rawPayload = await readV2RawThreads(codexHome, { now });
+  const tagsByThread = await readV2TagsByThread(codexHome);
+  const rawThreads = enrichThreadsWithTags(rawPayload.threads, tagsByThread);
+  const snapshot = buildV2SnapshotFromThreads({
+    now,
+    codexHome,
+    threads: rawThreads,
+    warnings: rawPayload.warnings || [],
+  });
+  return {
+    snapshot,
+    rawThreads,
+    sources: rawPayload.sources || {},
+  };
+}
+
+async function getV2ThreadPayload(threadId, now = new Date()) {
+  if (!isThreadId(threadId)) return null;
+  const { snapshot, rawThreads } = await loadV2SnapshotPayload(now);
+  const thread = snapshot.threads.find((item) => item.id === threadId) || null;
+  if (!thread) return null;
+  const raw = rawThreads.find((item) => item.id === threadId) || null;
+  return buildV2ThreadDetail({ now, codexHome, thread, raw });
 }
 
 function parsePositiveInt(value, fallback, max) {
@@ -2038,7 +2442,7 @@ async function readThreadEventsPayload(threadId, query = new URLSearchParams()) 
 }
 
 async function readTagsPayload() {
-  const tagMaps = await Promise.all(activeProviders.map((name) => readThreadTags(name === "claude" ? claudeTagsPath : codexTagsPath)));
+  const tagMaps = await Promise.all(activeProviders.map((name) => readThreadTags(tagsPathForProvider(name))));
   const tagsByThread = {};
   for (const map of tagMaps) {
     for (const [threadId, tags] of Object.entries(map)) {
@@ -2086,6 +2490,7 @@ function readConfigPayload() {
     activeProviders,
     codexHome,
     claudeHome,
+    copilotHome,
     dataHome,
     publicDir,
     statusWindows,
@@ -2095,6 +2500,7 @@ function readConfigPayload() {
       provider: projectConfig.provider || null,
       codexHome: projectConfig.codexHome || null,
       claudeHome: projectConfig.claudeHome || null,
+      copilotHome: projectConfig.copilotHome || null,
       openBrowser: Boolean(projectConfig.openBrowser),
       recentMinutes: projectConfig.recentMinutes || null,
       completeMinutes: projectConfig.completeMinutes || null,
@@ -2104,93 +2510,60 @@ function readConfigPayload() {
   };
 }
 
-function readSourcesPayload() {
-  if (provider === "claude") {
+function readProviderSourcePayload(sourceProvider) {
+  if (sourceProvider === "claude") {
     return {
-      provider,
-      providerLabel,
+      provider: "claude",
+      providerLabel: providerLabels.claude,
       claudeHome,
-      dataHome,
+      dataHome: claudeHome,
       claudeProjectsRoot,
-      tagsPath,
-      webhooksPath,
-      localStatePath,
+      tagsPath: claudeTagsPath,
+      webhooksPath: path.join(claudeHome, "agentqueue-webhooks.json"),
+      localStatePath: claudeLocalStatePath,
       sessionsRoot: claudeProjectsRoot,
       exists: {
         claudeHome: fsSync.existsSync(claudeHome),
         claudeProjectsRoot: fsSync.existsSync(claudeProjectsRoot),
-        tags: fsSync.existsSync(tagsPath),
-        webhooks: fsSync.existsSync(webhooksPath),
-        localState: fsSync.existsSync(localStatePath),
+        tags: fsSync.existsSync(claudeTagsPath),
+        webhooks: fsSync.existsSync(path.join(claudeHome, "agentqueue-webhooks.json")),
+        localState: fsSync.existsSync(claudeLocalStatePath),
       },
     };
   }
-
-  if (provider === "mixed") {
+  if (sourceProvider === "copilot") {
     return {
-      provider,
-      providerLabel,
-      activeProviders,
-      codexHome,
-      claudeHome,
-      dataHome,
-      sources: {
-        codex: {
-          provider: "codex",
-          providerLabel: providerLabels.codex,
-          codexHome,
-          candidateIndexPaths,
-          globalStatePath,
-          tagsPath: codexTagsPath,
-          webhooksPath,
-          processManagerPath,
-          sessionsRoot,
-          stateDbPath,
-          goalsDbPath,
-          logsDbPath,
-          exists: {
-            codexHome: fsSync.existsSync(codexHome),
-            index: candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)),
-            globalState: fsSync.existsSync(globalStatePath),
-            tags: fsSync.existsSync(codexTagsPath),
-            webhooks: fsSync.existsSync(webhooksPath),
-            processManager: fsSync.existsSync(processManagerPath),
-            sessionsRoot: fsSync.existsSync(sessionsRoot),
-            stateDb: fsSync.existsSync(stateDbPath),
-            goalsDb: fsSync.existsSync(goalsDbPath),
-            logsDb: fsSync.existsSync(logsDbPath),
-          },
-        },
-        claude: {
-          provider: "claude",
-          providerLabel: providerLabels.claude,
-          claudeHome,
-          dataHome: claudeHome,
-          claudeProjectsRoot,
-          tagsPath: claudeTagsPath,
-          webhooksPath: path.join(claudeHome, "agentqueue-webhooks.json"),
-          localStatePath,
-          sessionsRoot: claudeProjectsRoot,
-          exists: {
-            claudeHome: fsSync.existsSync(claudeHome),
-            claudeProjectsRoot: fsSync.existsSync(claudeProjectsRoot),
-            tags: fsSync.existsSync(claudeTagsPath),
-            webhooks: fsSync.existsSync(path.join(claudeHome, "agentqueue-webhooks.json")),
-            localState: fsSync.existsSync(localStatePath),
-          },
-        },
+      provider: "copilot",
+      providerLabel: providerLabels.copilot,
+      copilotHome,
+      dataHome: copilotHome,
+      copilotSessionStateRoot,
+      dataDbPath: copilotDataDbPath,
+      sessionStoreDbPath: copilotSessionStoreDbPath,
+      tagsPath: copilotTagsPath,
+      webhooksPath: path.join(copilotHome, "agentqueue-webhooks.json"),
+      localStatePath: copilotLocalStatePath,
+      sessionsRoot: copilotSessionStateRoot,
+      exists: {
+        copilotHome: fsSync.existsSync(copilotHome),
+        copilotSessionStateRoot: fsSync.existsSync(copilotSessionStateRoot),
+        dataDb: fsSync.existsSync(copilotDataDbPath),
+        sessionStoreDb: fsSync.existsSync(copilotSessionStoreDbPath),
+        tags: fsSync.existsSync(copilotTagsPath),
+        webhooks: fsSync.existsSync(path.join(copilotHome, "agentqueue-webhooks.json")),
+        localState: fsSync.existsSync(copilotLocalStatePath),
       },
     };
   }
-
   return {
-    provider,
-    providerLabel,
+    provider: "codex",
+    providerLabel: providerLabels.codex,
     codexHome,
+    dataHome: codexHome,
     candidateIndexPaths,
     globalStatePath,
-    tagsPath,
-    webhooksPath,
+    tagsPath: codexTagsPath,
+    webhooksPath: path.join(codexHome, "agentqueue-webhooks.json"),
     processManagerPath,
     sessionsRoot,
     stateDbPath,
@@ -2198,10 +2571,11 @@ function readSourcesPayload() {
     logsDbPath,
     exists: {
       codexHome: fsSync.existsSync(codexHome),
+      index: candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)),
       sessionIndex: candidateIndexPaths.filter((filePath) => fsSync.existsSync(filePath)),
       globalState: fsSync.existsSync(globalStatePath),
-      tags: fsSync.existsSync(tagsPath),
-      webhooks: fsSync.existsSync(webhooksPath),
+      tags: fsSync.existsSync(codexTagsPath),
+      webhooks: fsSync.existsSync(path.join(codexHome, "agentqueue-webhooks.json")),
       processManager: fsSync.existsSync(processManagerPath),
       sessionsRoot: fsSync.existsSync(sessionsRoot),
       stateDb: fsSync.existsSync(stateDbPath),
@@ -2211,8 +2585,24 @@ function readSourcesPayload() {
   };
 }
 
+function readSourcesPayload() {
+  if (provider !== "mixed") return readProviderSourcePayload(provider);
+
+  return {
+    provider,
+    providerLabel,
+    activeProviders,
+    codexHome,
+    claudeHome,
+    copilotHome,
+    dataHome,
+    sources: Object.fromEntries(activeProviders.map((name) => [name, readProviderSourcePayload(name)])),
+  };
+}
+
 async function serveStatic(res, requestPath) {
-  const safePath = requestPath === "/" ? "/index.html" : requestPath;
+  let safePath = requestPath === "/" ? "/index.html" : requestPath;
+  if (safePath === "/v2" || safePath === "/v2/") safePath = "/v2/index.html";
   const filePath = path.normalize(path.join(publicDir, safePath));
 
   if (!filePath.startsWith(publicDir)) {
@@ -2252,6 +2642,10 @@ async function runDoctor() {
   if (activeProviders.includes("claude")) {
     add(fsSync.existsSync(claudeHome) ? "pass" : "fail", "CLAUDE_HOME", claudeHome);
     add(fsSync.existsSync(claudeProjectsRoot) ? "pass" : "warn", "Claude projects", claudeProjectsRoot);
+  }
+  if (activeProviders.includes("copilot")) {
+    add(fsSync.existsSync(copilotHome) ? "pass" : "fail", "COPILOT_HOME", copilotHome);
+    add(fsSync.existsSync(copilotSessionStateRoot) ? "pass" : "warn", "Copilot sessions", copilotSessionStateRoot);
   }
   add(git.available ? "pass" : "warn", "Git", git.available ? "git command is available" : git.error || "git unavailable");
   add(git.isRepo ? "pass" : "warn", "Install type", git.isRepo ? `git clone on ${git.branch || "detached"} @ ${git.commit}` : "not a git checkout");
@@ -2343,6 +2737,7 @@ async function renderHealthPage() {
     ["Node", process.version],
     ["CODEX_HOME", codexHome],
     ["CLAUDE_HOME", claudeHome],
+    ["COPILOT_HOME", copilotHome],
     ["SQLite", DatabaseSync ? "available" : "unavailable; Node 24+ recommended"],
     ["Git install", git.isRepo ? `${git.repo} ${git.dirty ? "(local changes)" : "(clean)"}` : "not a git checkout"],
     ["Latest release", release.available ? `${release.latestTag}${release.updateAvailable ? " available" : " current"}` : release.reason || "unknown"],
@@ -2378,6 +2773,7 @@ function getOpenApiDocument() {
     tags: [
       { name: "System" },
       { name: "Threads" },
+      { name: "V2 Threads" },
       { name: "Tags" },
       { name: "Codex State" },
       { name: "Integrations" },
@@ -2466,12 +2862,49 @@ function getOpenApiDocument() {
           responses: { 200: okResponse("Thread snapshot", { $ref: "#/components/schemas/ThreadSnapshot" }) },
         },
       },
-      "/api/threads/{threadId}": {
+      "/api/v2/snapshot": {
         get: {
-          tags: ["Threads"],
+          tags: ["V2 Threads"],
+          summary: "Return the V2 monitor snapshot contract.",
+          responses: { 200: okResponse("V2 thread snapshot", { $ref: "#/components/schemas/V2Snapshot" }) },
+        },
+      },
+      "/api/v2/threads/{threadId}": {
+        get: {
+          tags: ["V2 Threads"],
           summary: "Return one enriched thread from the current snapshot.",
           parameters: [threadIdParameter],
-          responses: { 200: okResponse("Thread payload"), 404: errorResponse },
+          responses: { 200: okResponse("V2 thread detail", { $ref: "#/components/schemas/V2ThreadDetail" }), 404: errorResponse },
+        },
+      },
+      "/api/v2/threads/{threadId}/tags": {
+        patch: {
+          tags: ["V2 Threads"],
+          summary: "Replace V2 thread tags in AgentQueue local sidecar.",
+          parameters: [threadIdParameter],
+          requestBody: { required: true, content: jsonContent({ $ref: "#/components/schemas/TagsInput" }) },
+          responses: { 200: okResponse("Updated V2 tags"), 400: errorResponse },
+        },
+      },
+      "/api/v2/threads/{threadId}/read": {
+        post: {
+          tags: ["V2 Threads"],
+          summary: "Mark a V2 thread as read in Codex unread-state stores.",
+          parameters: [threadIdParameter],
+          responses: { 200: okResponse("Read-state update"), 400: errorResponse },
+        },
+      },
+      "/api/v2/preferences": {
+        get: {
+          tags: ["V2 Threads"],
+          summary: "Return V2 local preferences.",
+          responses: { 200: okResponse("V2 preferences") },
+        },
+        patch: {
+          tags: ["V2 Threads"],
+          summary: "Update V2 local preferences in AgentQueue sidecar storage.",
+          requestBody: { required: true, content: jsonContent({ $ref: "#/components/schemas/V2Preferences" }) },
+          responses: { 200: okResponse("Updated V2 preferences"), 400: errorResponse },
         },
       },
       "/api/threads/{threadId}/session": {
@@ -2526,7 +2959,7 @@ function getOpenApiDocument() {
       "/api/threads/{threadId}/open": {
         post: {
           tags: ["Integrations"],
-          summary: "Open a thread via its provider deep link (codex:// for Codex, file:// transcript for Claude Code).",
+          summary: "Open a thread via its provider link (codex:// for Codex, file:// transcript/event files for local transcript providers).",
           parameters: [threadIdParameter],
           requestBody: { content: jsonContent({ type: "object", properties: { dryRun: { type: "boolean" } } }) },
           responses: { 200: okResponse("Open result"), 400: errorResponse },
@@ -2577,6 +3010,153 @@ function getOpenApiDocument() {
             summary: { type: "object" },
             threads: { type: "array", items: { type: "object" } },
           },
+        },
+        V2Snapshot: {
+          type: "object",
+          required: ["generatedAt", "codexHome", "health", "summary", "threads"],
+          properties: {
+            generatedAt: { type: "string", format: "date-time" },
+            codexHome: { type: "string" },
+            health: { $ref: "#/components/schemas/V2Health" },
+            summary: { $ref: "#/components/schemas/V2Summary" },
+            threads: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ThreadSummary" },
+            },
+          },
+        },
+        V2Health: {
+          type: "object",
+          required: ["level", "warnings"],
+          properties: {
+            level: { type: "string", enum: ["ok", "warn", "error"] },
+            warnings: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+        },
+        V2Summary: {
+          type: "object",
+          required: ["total", "running", "stale", "needsAttention", "unread", "risk"],
+          properties: {
+            total: { type: "integer", minimum: 0 },
+            running: { type: "integer", minimum: 0 },
+            stale: { type: "integer", minimum: 0 },
+            needsAttention: { type: "integer", minimum: 0 },
+            unread: { type: "integer", minimum: 0 },
+            risk: { type: "integer", minimum: 0 },
+          },
+        },
+        ThreadSummary: {
+          type: "object",
+          required: [
+            "id",
+            "title",
+            "status",
+            "statusLabel",
+            "attentionRank",
+            "attentionReason",
+            "confidence",
+            "threadSource",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            title: { type: "string" },
+            workspace: { type: ["string", "null"] },
+            workspaceLabel: { type: "string" },
+            status: { type: "string", enum: Object.values(THREAD_STATUSES) },
+            statusLabel: { type: "string" },
+            attentionRank: { type: "integer", minimum: 0 },
+            attentionReason: { type: "string", enum: Object.values(ATTENTION_REASON_ENUM) },
+            confidence: { type: "string", enum: Object.values(CONFIDENCE_LEVELS) },
+            activityAt: { type: ["string", "null"], format: "date-time" },
+            activityAgeMs: { type: ["number", "null"], minimum: 0 },
+            threadSource: { type: "string" },
+            parentThreadId: { type: ["string", "null"], format: "uuid" },
+            badges: { type: "array", items: { type: "string" } },
+            tags: { type: "array", items: { type: "string" } },
+            openUrl: { type: "string", format: "uri" },
+            evidence: {
+              type: "array",
+              items: { $ref: "#/components/schemas/StatusEvidence" },
+            },
+          },
+        },
+        StatusEvidence: {
+          type: "object",
+          required: ["kind", "source", "observedAt", "message"],
+          properties: {
+            kind: { type: "string", enum: Object.values(EVIDENCE_KINDS) },
+            source: { type: "string" },
+            observedAt: { type: ["string", "null"], format: "date-time" },
+            message: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        ThreadDetail: {
+          type: "object",
+          required: ["thread", "timeline", "sources", "diagnostics", "actions", "evidence", "generatedAt", "codexHome"],
+          properties: {
+            thread: { $ref: "#/components/schemas/ThreadSummary" },
+            timeline: { type: "array", items: { $ref: "#/components/schemas/ThreadDetailTimelineItem" } },
+            sources: { type: "array", items: { $ref: "#/components/schemas/ThreadDetailSource" } },
+            diagnostics: { type: "array", items: { $ref: "#/components/schemas/ThreadDetailDiagnostic" } },
+            actions: { $ref: "#/components/schemas/ThreadDetailActions" },
+            evidence: {
+              type: "array",
+              items: { $ref: "#/components/schemas/StatusEvidence" },
+            },
+            generatedAt: { type: "string", format: "date-time" },
+            codexHome: { type: "string" },
+          },
+        },
+        ThreadDetailTimelineItem: {
+          type: "object",
+          properties: {
+            kind: { type: "string" },
+            at: { type: ["string", "null"], format: "date-time" },
+            label: { type: "string" },
+            message: { type: "string" },
+          },
+        },
+        ThreadDetailSource: {
+          type: "object",
+          properties: {
+            kind: { type: "string" },
+            available: { type: "boolean" },
+            path: { type: ["string", "null"] },
+          },
+        },
+        ThreadDetailDiagnostic: {
+          type: "object",
+          properties: {
+            level: { type: "string", enum: ["warning", "info", "error"] },
+            code: { type: "string" },
+            message: { type: "string" },
+          },
+        },
+        ThreadDetailActions: {
+          type: "object",
+          required: ["canOpen", "canMarkRead", "canTag", "canPin"],
+          properties: {
+            canOpen: { type: "boolean" },
+            canMarkRead: { type: "boolean" },
+            canTag: { type: "boolean" },
+            canPin: { type: "boolean" },
+          },
+        },
+        V2ThreadDetail: { $ref: "#/components/schemas/ThreadDetail" },
+        V2Preferences: {
+          type: "object",
+          properties: {
+            version: { type: "string" },
+            monitorView: { type: "string", enum: ["list", "board"] },
+            focusNeedsAttention: { type: "boolean" },
+            hideDone: { type: "boolean" },
+          },
+          required: ["version", "monitorView", "focusNeedsAttention", "hideDone"],
+          additionalProperties: false,
         },
         TagsInput: {
           type: "object",
@@ -2678,6 +3258,64 @@ async function handleApiRequest(req, res, url) {
   if (url.pathname === "/api/openapi.json") {
     if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
     sendJson(res, 200, getOpenApiDocument());
+    return true;
+  }
+
+  if (url.pathname === "/api/v2/snapshot") {
+    if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+    const payload = await loadV2SnapshotPayload(new Date());
+    sendJson(res, 200, payload.snapshot);
+    return true;
+  }
+
+  if (url.pathname === "/api/v2/preferences") {
+    if (req.method === "GET") {
+      sendJson(res, 200, { ok: true, preferences: await readPreferences(codexHome) });
+      return true;
+    }
+
+    if (req.method === "PATCH") {
+      const body = await readRequestJson(req);
+      sendJson(res, 200, { ok: true, preferences: await patchPreferences(codexHome, body) });
+      return true;
+    }
+
+    return sendMethodNotAllowed(res, ["GET", "PATCH"]);
+  }
+
+  const v2ThreadRoute = url.pathname.match(/^\/api\/v2\/threads\/([0-9a-f-]{36})(?:\/([^/]+))?$/i);
+  if (v2ThreadRoute) {
+    const threadId = v2ThreadRoute[1];
+    const action = v2ThreadRoute[2] || "";
+
+    if (!action) {
+      if (req.method !== "GET") return sendMethodNotAllowed(res, ["GET"]);
+      const found = await getV2ThreadPayload(threadId);
+      if (!found) return sendJson(res, 404, { error: "Thread not found" });
+      sendJson(res, 200, found);
+      return true;
+    }
+
+    if (action === "tags") {
+      if (req.method !== "PATCH") return sendMethodNotAllowed(res, ["PATCH"]);
+      const body = await readRequestJson(req);
+      sendJson(res, 200, { ok: true, ...(await setV2ThreadTags(codexHome, threadId, body.tags)) });
+      return true;
+    }
+
+    if (action === "read") {
+      if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+      sendJson(res, 200, { ok: true, ...(await markThreadsRead([threadId])) });
+      return true;
+    }
+
+    return sendJson(res, 404, { error: "Unsupported V2 thread action" });
+  }
+
+  if (url.pathname === "/api/threads/read") {
+    if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
+    const body = await readRequestJson(req);
+    sendJson(res, 200, { ok: true, ...(await markThreadsRead(body.threadIds)) });
     return true;
   }
 
@@ -2788,6 +3426,9 @@ async function handleApiRequest(req, res, url) {
       if (targetProvider === "claude") {
         const filePath = (await getClaudeSessionFilesById()).get(threadId);
         target = filePath ? pathToFileURL(filePath).href : "";
+      } else if (targetProvider === "copilot") {
+        const filePath = (await getCopilotSessionFilesById()).get(threadId);
+        target = filePath ? pathToFileURL(filePath).href : "";
       }
       const opened = Boolean(target) && !body.dryRun;
       if (opened) openBrowser(target);
@@ -2830,6 +3471,7 @@ async function handleApiRequest(req, res, url) {
       activeProviders,
       codexHome,
       claudeHome,
+      copilotHome,
       dataHome,
       node: process.version,
       sqlite: Boolean(DatabaseSync),

@@ -1671,6 +1671,10 @@ body.modal-open {
   object-fit: contain;
 }
 
+.badge.provider-copilot {
+  border-color: #cbd5e1;
+}
+
 .badge.provider-codex {
   border-color: #cbd5e1;
 }

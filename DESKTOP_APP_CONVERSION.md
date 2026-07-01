@@ -8,6 +8,7 @@ AgentQueue is currently a dependency-light Node.js app:
 
 - `server.js` starts an HTTP server, serves static UI assets from `public/`, exposes the local JSON/SSE API, and opens a browser when requested.
 - `public/index.html`, `public/app.js`, and `public/styles.css` are the primary UI surface.
+- `public/v2/*` is the V2 monitor shell and should continue to work under the same routes.
 - `start-dashboard.cmd` and `start-dashboard.ps1` require a system Node.js install and set `AGENTQUEUE_OPEN=1`.
 - `install.ps1` installs a release archive to `%LOCALAPPDATA%\AgentQueue`, then optionally launches the command launcher and browser.
 - `build-agentqueue-installer-exe.ps1` builds an installer exe wrapper around `install.ps1`; it is not a packaged desktop application.
@@ -34,7 +35,7 @@ The installed exe should:
 - Start AgentQueue without requiring the user to install Node.js separately.
 - Start the existing local API and dashboard on `127.0.0.1`, using the existing automatic port fallback from `4173`.
 - Open the existing dashboard UI in a desktop window.
-- Keep all current features working: Codex and Claude providers, local tags, unread state, Stream Deck endpoints, update checks, doctor diagnostics, webhooks, Swagger/OpenAPI, and the current dashboard routes.
+- Keep all current features working: Codex and Claude providers, local tags, unread state, Stream Deck endpoints, update checks, doctor diagnostics, webhooks, Swagger/OpenAPI, V1, and V2 routes.
 - Provide a Windows tray icon with `Open AgentQueue`, `Start at login`, `Diagnostics`, `Open logs`, and `Quit`.
 - Hide to tray on window close by default, while `Quit` fully stops the server.
 - Enforce a single running desktop instance.
@@ -163,6 +164,7 @@ Window rules:
 Tray menu:
 
 - `Open AgentQueue`
+- `Open V2 Monitor`
 - `Start at login` checkbox
 - `Open in browser`
 - `Diagnostics`
@@ -295,7 +297,9 @@ Update these docs in the implementation PR:
   - Document tray behavior and start-at-login.
 - `.agentqueue.example.json`
   - Add any supported desktop settings if they are config-file driven.
-- Desktop architecture docs
+- `PRODUCT_V2.md`
+  - Move tray/desktop wrapper from optional post-MVP to MVP only when the implementation is accepted.
+- `ARCHITECTURE_V2.md`
   - Document the desktop shell as a host around the same local API.
 
 ## Suggested Milestones

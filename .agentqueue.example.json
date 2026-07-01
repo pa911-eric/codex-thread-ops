@@ -3,6 +3,7 @@
   "provider": "auto",
   "codexHome": "C:/Users/Eric/.codex",
   "claudeHome": "C:/Users/Eric/.claude",
+  "copilotHome": "C:/Users/Eric/.copilot",
   "recentMinutes": 120,
   "completeMinutes": 10,
   "staleMinutes": 15,

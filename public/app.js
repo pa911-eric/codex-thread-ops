@@ -533,12 +533,16 @@ function makeBadge(label, tone = "") {
 function makeProviderBadge(thread) {
   const label = thread.providerLabel || thread.provider || "Provider";
   const badge = document.createElement("span");
-  badge.className = `badge provider-icon provider-${thread.provider === "claude" ? "claude" : "codex"}`;
+  badge.className = `badge provider-icon provider-${thread.provider || "codex"}`;
   badge.title = label;
   badge.setAttribute("aria-label", label);
 
   const icon = document.createElement("img");
-  icon.src = thread.provider === "claude" ? "/provider-claude.png" : "/provider-codex.png";
+  icon.src = thread.provider === "claude"
+    ? "/provider-claude.png"
+    : thread.provider === "copilot"
+      ? "/provider-copilot.png"
+      : "/provider-codex.png";
   icon.alt = "";
   icon.loading = "lazy";
   badge.append(icon);
